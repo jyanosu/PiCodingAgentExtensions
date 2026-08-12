@@ -12,7 +12,7 @@
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
@@ -45,6 +45,23 @@ function loadEnvFile(envPath: string): Record<string, string> {
   } catch {
     return {};
   }
+}
+
+/** Read enabled value from config (env var or .env file). Default: true. */
+function readEnabledFromConfig(): boolean {
+  const parse = (v: string) => v.toLowerCase() !== "false" && v !== "0" && v.toLowerCase() !== "off";
+
+  // Try environment variable first
+  const envVal = process.env.OBSIDIAN_LOGGER_ENABLED;
+  if (envVal !== undefined) return parse(envVal);
+
+  // Try .env file next to this extension
+  const envFile = join(__dirname, ".env");
+  const envVars = loadEnvFile(envFile);
+  if ("OBSIDIAN_LOGGER_ENABLED" in envVars) return parse(envVars.OBSIDIAN_LOGGER_ENABLED);
+
+  // Default: enabled
+  return true;
 }
 
 /** Get vault path from .env file or environment variable */
@@ -114,6 +131,31 @@ function extractAssistantText(content: unknown): string {
   return parts.join("\n");
 }
 
+/** Ensure a README.md exists in the project folder with the full path info */
+async function ensureProjectReadme(vaultPath: string, projectName: string): Promise<void> {
+  const projectFolder = join(vaultPath, "Projects", projectName);
+  const readmePath = join(projectFolder, "README.md");
+
+  try {
+    // Check if already exists
+    await readFile(readmePath, "utf-8");
+    return;
+  } catch {
+    // Does not exist, create it
+  }
+
+  const content = `# ${projectName}\n\nFull path: ${projectFolder}\n`;
+  try {
+    await mkdir(projectFolder, { recursive: true });
+    await writeFile(readmePath, content, "utf-8");
+  } catch (err) {
+    const msg = typeof err === "object" && err !== null && "message" in err
+      ? (err as { message: string }).message
+      : String(err);
+    console.error(`[obsidian-logger] Failed to create README.md: ${msg}`);
+  }
+}
+
 /** Append content to the daily MD file */
 async function appendToDailyFile(ctx: ExtensionContext, vaultPath: string, projectName: string, sessionId: string, role: string, text: string): Promise<void> {
   if (!text.trim()) return;
@@ -162,14 +204,25 @@ async function appendToDailyFile(ctx: ExtensionContext, vaultPath: string, proje
 }
 
 export default function (pi: ExtensionAPI) {
+  let enabled = true;
   let vaultPath: string | undefined;
   let projectName: string = "";
   let sessionId: string = "";
+  let readmeChecked = false;
 
   pi.on("session_start", async (_event, ctx) => {
+    enabled = readEnabledFromConfig();
+
+    if (!enabled) {
+      console.log("[obsidian-logger] Logger disabled (OBSIDIAN_LOGGER_ENABLED not set or false).");
+      ctx.ui.notify(`Obsidian logger: OFF`, "warning");
+      return;
+    }
+
     vaultPath = getVaultPath();
     if (!vaultPath) {
       console.log("[obsidian-logger] OBSIDIAN_VAULT_PATH not set. Set it in .env file next to the extension or as an environment variable.");
+      ctx.ui.notify(`Obsidian logger: ON (no vault path set)`, "info");
       return;
     }
 
@@ -178,11 +231,12 @@ export default function (pi: ExtensionAPI) {
 
     const folderPath = join(vaultPath, "Projects", projectName, sessionId);
     console.log(`[obsidian-logger] Logging to: ${folderPath}`);
+    ctx.ui.notify(`Obsidian logger: ON`, "success");
   });
 
   // Capture user prompts and assistant responses
   pi.on("message_end", async (event, ctx) => {
-    if (!vaultPath || !sessionId) return;
+    if (!enabled || !vaultPath || !sessionId) return;
 
     const role = event.message.role;
     if (role !== "user" && role !== "assistant") return;
@@ -191,6 +245,30 @@ export default function (pi: ExtensionAPI) {
       ? extractUserText(event.message.content)
       : extractAssistantText(event.message.content);
 
+    // Ensure README.md exists on first log of session
+    if (!readmeChecked) {
+      readmeChecked = true;
+      await ensureProjectReadme(vaultPath, projectName);
+    }
+
     await appendToDailyFile(ctx, vaultPath, projectName, sessionId, role, text);
+  });
+
+  // Command to toggle: /obsidian-logger [on|off|toggle]
+  pi.registerCommand("obsidian-logger", {
+    description: "Toggle Obsidian logging on or off",
+    handler: async (args, ctx) => {
+      const arg = (args || "").trim().toLowerCase();
+
+      if (arg === "on") {
+        enabled = true;
+      } else if (arg === "off") {
+        enabled = false;
+      } else {
+        enabled = !enabled;
+      }
+
+      ctx.ui.notify(`Obsidian logger: ${enabled ? "ON" : "OFF"}`, enabled ? "success" : "warning");
+    },
   });
 }
