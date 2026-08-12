@@ -14,6 +14,26 @@ Records all prompts and responses to Markdown files in your Obsidian vault.
    export OBSIDIAN_VAULT_PATH="C:/path/to/vault"
    ```
 
+### Disable Logging (Optional)
+
+Set `OBSIDIAN_LOGGER_ENABLED` to `false`, `0`, or `off` in `.env` or as an environment variable. Default is **enabled**.
+
+```
+OBSIDIAN_LOGGER_ENABLED=false
+```
+
+### Toggle at Runtime
+
+Use the `/obsidian-logger` command to toggle logging without restarting:
+
+| Command | Action |
+|---|---|
+| `/obsidian-logger` | Toggle on/off |
+| `/obsidian-logger on` | Enable logging |
+| `/obsidian-logger off` | Disable logging |
+
+A notification shows the current state when Pi loads and after each toggle.
+
 ## Folder Structure
 
 ```
