@@ -18,6 +18,31 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
+/** Detect available microphones via FFmpeg DirectShow, return first real hardware mic */
+function detectDefaultMic(): string | null {
+  try {
+    const { execSync } = require("node:child_process");
+    const output = execSync("ffmpeg -list_devices true -f dshow -i dummy 2>&1", { encoding: "utf8" });
+    const virtualNames = ["steam", "nvidia", "virtual", "obs", "broadcast", "blackshark"];
+    for (const line of output.split("\n")) {
+      if (!line.includes("(audio)")) continue;
+      const match = line.match(/"([^"]+)"/);
+      if (match) {
+        const name = match[1];
+        const lower = name.toLowerCase();
+        if (!virtualNames.some(v => lower.includes(v))) return name;
+      }
+    }
+    // Fallback: return first audio device
+    for (const line of output.split("\n")) {
+      if (!line.includes("(audio)")) continue;
+      const match = line.match(/"([^"]+)"/);
+      if (match) return match[1];
+    }
+  } catch {}
+  return null;
+}
+
 /** Load .env file next to this extension (simple KEY=VALUE parser) */
 function loadEnvFile(envPath: string): Record<string, string> {
   try {
@@ -46,7 +71,11 @@ function getConfig(): { whisperUrl: string; micDevice: string; silenceDuration: 
   const envVars = loadEnvFile(envFile);
 
   const whisperUrl = process.env.WHISPER_URL || envVars.WHISPER_URL || "https://whisper.local.johnyan.net";
-  const micDevice = process.env.MIC_DEVICE || envVars.MIC_DEVICE || "Microphone (BlackShark V3 Pro - Chat)";
+  let micDevice = process.env.MIC_DEVICE || envVars.MIC_DEVICE || "";
+  // Auto-detect first real hardware mic if not configured
+  if (!micDevice) {
+    micDevice = detectDefaultMic() || "Microphone (HyperX SoloCast)";
+  }
   const silenceDuration = parseInt(process.env.SILENCE_DURATION || envVars.SILENCE_DURATION || "2", 10);
 
   return { whisperUrl, micDevice, silenceDuration: isNaN(silenceDuration) ? 2 : Math.max(1, silenceDuration) };
@@ -92,7 +121,7 @@ function recordAudio(durationSeconds: number, micDevice: string, silenceDuration
   return new Promise((resolve, reject) => {
     const tempFile = join(tmpdir(), `voice-${Date.now()}.wav`);
 
-    // Output raw s16le PCM (no header) to stdout
+    // DirectShow with detected mic device
     const proc = spawn("ffmpeg", [
       "-nostdin",
       "-y",
@@ -235,7 +264,8 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("session_start", async (_event, ctx) => {
     config = getConfig();
-    ctx.ui.notify(`Voice input: ready (/voice or Alt+Q — stops after ${config.silenceDuration}s silence)`, "info");
+    ctx.ui.setStatus("voice", "ready");
+    ctx.ui.notify(`Voice input: ready (/voice or Alt+Q — stops after ${config.silenceDuration}s silence, mic: ${config.micDevice})`, "info");
   });
 
   // Keyboard shortcut to trigger voice input

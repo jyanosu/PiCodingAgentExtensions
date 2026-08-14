@@ -32,6 +32,7 @@ export default function (pi: ExtensionAPI) {
     // TUI handle captured from setFooter so the timer can request re-renders.
     let tuiHandle: any;
 
+    // Voice input state — checked via footerData.status
     // Cached git data — updated on a timer, never during render.
     let staged = 0;
     let unstaged = 0;
@@ -149,10 +150,13 @@ export default function (pi: ExtensionAPI) {
     ctx.ui.setFooter((tui, theme, footerData) => {
       tuiHandle = tui;
       const render = (width: number): string[] => {
-        // Left: project / branch [staged] [unstaged]
-        let left = branch
+        // Left: voice indicator + project / branch [staged] [unstaged]
+        const voiceStatus = (footerData as any)?.status?.voice;
+        const voiceIcon = voiceStatus === "ready" ? "\x1b[32m🎙\x1b[0m" : "";
+        const voiceSpacer = voiceIcon ? " " : "";
+        let left = voiceIcon + voiceSpacer + (branch
           ? theme.fg("accent", theme.bold(project)) + theme.fg("muted", " / ") + theme.fg("accent", theme.bold(branch))
-          : theme.fg("accent", project);
+          : theme.fg("accent", project));
 
         // Status info (read from cache — no I/O here).
         if (branch) {
