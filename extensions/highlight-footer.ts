@@ -45,57 +45,83 @@ export default function (pi: ExtensionAPI) {
     // Track whether Pi is actively working — skip git refresh during streaming.
     let activeToolCount = 0;
     let isStreaming = false;
+    let timerId: ReturnType<typeof setInterval> | undefined;
+    let isDisposed = false;
 
     /** Fetch git data asynchronously and update cache. Skips if Pi is actively working. */
     async function fetchGitData() {
-      if (isStreaming || activeToolCount > 0) return;
-      const [stagedResult, unstagedResult, porcelains, commitResult, branchResult, unpushedResult] = await Promise.all([
-        gitLines(["--no-optional-locks", "diff", "--name-only", "--cached"], ctx.cwd),
-        gitLines(["--no-optional-locks", "diff", "--name-only"], ctx.cwd),
-        gitLines(["--no-optional-locks", "status", "--porcelain"], ctx.cwd),
-        gitLines(["--no-optional-locks", "log", "-1", "--format=%s"], ctx.cwd),
-        gitLines(["--no-optional-locks", "branch", "--show-current"], ctx.cwd),
-        gitLines(["rev-list", "--count", "HEAD..@{u}"], ctx.cwd),
-      ]);
-
-      const newStaged = stagedResult?.length ?? 0;
-      const newUnstaged = unstagedResult?.length ?? 0;
-      const newBranch = branchResult?.[0] || null;
-      const newUnpushed = parseInt(unpushedResult?.[0], 10) || 0;
-
-      // Parse working tree from porcelain output.
-      const lines = porcelains || [];
-      let newAdded = 0, newModified = 0, newDeleted = 0;
-      for (const line of lines) {
-        const status = line.substring(0, 2).replace(/[ DCMR]/g, "").trim();
-        if (status.includes("A") || status.includes("?")) newAdded++;
-        else if (status.includes("M")) newModified++;
-        else if (status.includes("D")) newDeleted++;
+      if (isStreaming || activeToolCount > 0 || isDisposed) return;
+      let cwd: string;
+      try {
+        // Force ctx staleness check — throws if ctx stale after reload
+        cwd = ctx.cwd;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg.includes("stale") || msg.includes("replaced")) {
+          clearInterval(timerId);
+          isDisposed = true;
+          return;
+        }
+        throw err;
       }
+      try {
+        const [stagedResult, unstagedResult, porcelains, commitResult, branchResult, unpushedResult] = await Promise.all([
+          gitLines(["--no-optional-locks", "diff", "--name-only", "--cached"], cwd),
+          gitLines(["--no-optional-locks", "diff", "--name-only"], cwd),
+          gitLines(["--no-optional-locks", "status", "--porcelain"], cwd),
+          gitLines(["--no-optional-locks", "log", "-1", "--format=%s"], cwd),
+          gitLines(["--no-optional-locks", "branch", "--show-current"], cwd),
+          gitLines(["rev-list", "--count", "HEAD..@{u}"], cwd),
+        ]);
 
-      const commit = commitResult?.[0] || null;
+        const newStaged = stagedResult?.length ?? 0;
+        const newUnstaged = unstagedResult?.length ?? 0;
+        const newBranch = branchResult?.[0] || null;
+        const newUnpushed = parseInt(unpushedResult?.[0], 10) || 0;
 
-      // Only mark dirty if values actually changed (triggers re-render).
-      const changed = staged !== newStaged || unstaged !== newUnstaged ||
-        added !== newAdded || modified !== newModified || deleted !== newDeleted ||
-        lastCommit !== commit || branch !== newBranch || unpushed !== newUnpushed;
+        // Parse working tree from porcelain output.
+        const lines = porcelains || [];
+        let newAdded = 0, newModified = 0, newDeleted = 0;
+        for (const line of lines) {
+          const status = line.substring(0, 2).replace(/[ DCMR]/g, "").trim();
+          if (status.includes("A") || status.includes("?")) newAdded++;
+          else if (status.includes("M")) newModified++;
+          else if (status.includes("D")) newDeleted++;
+        }
 
-      staged = newStaged;
-      unstaged = newUnstaged;
-      added = newAdded;
-      modified = newModified;
-      deleted = newDeleted;
-      lastCommit = commit;
-      branch = newBranch;
-      unpushed = newUnpushed;
+        const commit = commitResult?.[0] || null;
 
-      if (changed && tuiHandle) {
-        tuiHandle.requestRender();
+        // Only mark dirty if values actually changed (triggers re-render).
+        const changed = staged !== newStaged || unstaged !== newUnstaged ||
+          added !== newAdded || modified !== newModified || deleted !== newDeleted ||
+          lastCommit !== commit || branch !== newBranch || unpushed !== newUnpushed;
+
+        staged = newStaged;
+        unstaged = newUnstaged;
+        added = newAdded;
+        modified = newModified;
+        deleted = newDeleted;
+        lastCommit = commit;
+        branch = newBranch;
+        unpushed = newUnpushed;
+
+        if (changed && tuiHandle) {
+          try { tuiHandle.requestRender(); } catch {} // ignore stale tui
+        }
+      } catch (err: unknown) {
+        // ctx stale after reload — kill timer silently
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg.includes("stale") || msg.includes("replaced")) {
+          clearInterval(timerId);
+          isDisposed = true;
+          return;
+        }
+        throw err;
       }
     }
 
     fetchGitData();
-    const timerId = setInterval(fetchGitData, REFRESH_INTERVAL);
+    timerId = setInterval(fetchGitData, REFRESH_INTERVAL);
 
     // Pause git refresh while Pi is streaming or running tools.
     pi.on("message_start", async (event) => {
@@ -211,6 +237,7 @@ export default function (pi: ExtensionAPI) {
 
     // Cleanup on session end.
     pi.on("session_end", () => {
+      isDisposed = true;
       clearInterval(timerId);
       tuiHandle = null;
     });
