@@ -10,6 +10,9 @@ Custom extensions for [Pi Coding Agent](https://github.com/earendil-works/pi-cod
 | [compaction-model](./extensions/compaction-model.ts) | Uses a separate smaller model for session compaction and branch summarization |
 | [working-indicator](./extensions/working-indicator.ts) | Context-aware working indicator that changes based on what Pi is doing |
 | [response-latency](./extensions/response-latency.ts) | Shows response latency with color-coded speed phases |
+| [voice-input](./extensions/voice-input/) | Voice-to-text prompts via FFmpeg + faster-whisper (`/voice`, `Alt+Q`) |
+| [clipboard-cleanup](./extensions/clipboard-cleanup.ts) | Deletes stale `pi-clipboard-*` screenshot temp files on session start |
+| [look](./extensions/look.ts) | `/look` — send clipboard screenshot (or image path) to the model as an attached image |
 
 ## Installation
 
@@ -63,6 +66,43 @@ No configuration needed. Shows latency in status bar with phases:
 - `2-5s` — ◉ normal (yellow)
 - `5-10s` — ◈ slow (orange)
 - `> 10s` — ✖ stalling (red)
+
+### voice-input
+
+Voice-to-text: records your microphone until silence, transcribes via a faster-whisper server, and sends the text as your prompt.
+
+Commands:
+- `/voice` — record until ~2s silence (default max 20s)
+- `/voice 30` — allow up to 30s of speech
+- `Alt+Q` — same as `/voice`
+
+Config via `.env` next to the extension (see [extensions/voice-input/README.md](./extensions/voice-input/README.md)):
+```bash
+WHISPER_URL=https://whisper.local.johnyan.net   # OpenAI-compatible /v1/audio/transcriptions
+MIC_DEVICE=Microphone (Your Mic)                # optional — auto-detects first hardware mic if omitted
+SILENCE_DURATION=3                              # seconds of silence before stopping
+```
+
+Requires: FFmpeg in PATH, a running faster-whisper server.
+
+### clipboard-cleanup
+
+No configuration needed. On session start, deletes `pi-clipboard-*` temp files (created by `Alt+V` image paste) older than 1 hour. Notifies when files are removed.
+
+### look
+
+Sends a screenshot or image directly to the model as an attached image. Requires a vision-capable model (`"input": ["text", "image"]` in `models.json`).
+
+Workflow:
+1. Take a screenshot: `Win+Shift+S`
+2. Type the command below and submit — the image is attached automatically
+
+Commands:
+- `/look` — analyze the newest clipboard screenshot (default: describe + analyze)
+- `/look what's wrong with this error?` — custom question about the screenshot
+- `/look C:\path\to\img.png describe this` — explicit image file + prompt
+
+Supported formats: png, jpg/jpeg, gif, webp, bmp. Only clipboard images from the last hour are considered.
 
 ## Development
 
