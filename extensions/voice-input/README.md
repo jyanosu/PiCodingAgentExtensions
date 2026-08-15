@@ -12,6 +12,18 @@ Type `/voice` and press Enter — records 5 seconds by default.
 | `/voice 10` | 10 seconds |
 | `/voice 30` | Up to 120 seconds |
 
+## Voice Slash Commands
+
+Say **"slash" + command** to trigger any slash command by voice. Whisper never transcribes `/`, so `slash` is the spoken prefix — the extension rewrites it.
+
+| You say | Becomes |
+|---|---|
+| "slash look what's wrong with this" | `/look what's wrong with this` |
+| "slash voice" | `/voice` |
+| "slash compact" | `/compact` |
+
+Works from both `/voice` and `Alt+Q`. Trailing periods Whisper adds are stripped from bare commands.
+
 ## How It Works
 
 1. You type `/voice [seconds]` and submit

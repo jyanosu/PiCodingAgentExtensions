@@ -76,6 +76,8 @@ Commands:
 - `/voice 30` — allow up to 30s of speech
 - `Alt+Q` — same as `/voice`
 
+Voice slash commands: say **"slash" + command** (e.g. "slash look what's wrong with this") to trigger any slash command by voice — rewritten to `/look ...` and dispatched automatically.
+
 Config via `.env` next to the extension (see [extensions/voice-input/README.md](./extensions/voice-input/README.md)):
 ```bash
 WHISPER_URL=https://whisper.local.johnyan.net   # OpenAI-compatible /v1/audio/transcriptions

@@ -255,6 +255,16 @@ function parseMaxDuration(text: string): number {
   return 20;
 }
 
+/** Convert spoken "slash <command>" to "/<command>" so voice can trigger slash commands */
+function voiceTextToInput(text: string): string {
+  const t = text.trim();
+  if (!/^slash\s+/i.test(t)) return t;
+  let out = "/" + t.replace(/^slash\s+/i, "");
+  // Whisper often appends a trailing "." — harmless in /look prompts but breaks bare command lookup
+  if (/^\/\S+\.$/.test(out)) out = out.slice(0, -1);
+  return out;
+}
+
 export default function (pi: ExtensionAPI) {
   let config: { whisperUrl: string; micDevice: string; silenceDuration: number } = {
     whisperUrl: "",
@@ -283,7 +293,8 @@ export default function (pi: ExtensionAPI) {
         for (const f of filesToDelete) await unlink(f).catch(() => {});
 
         if (text.trim()) {
-          pi.sendUserMessage(text);
+          // expandPromptTemplates dispatches slash commands spoken as "slash <cmd>"
+          pi.sendUserMessage(voiceTextToInput(text), { expandPromptTemplates: true });
         } else {
           ctx.ui.notify("Voice: no speech detected", "warning");
         }
@@ -322,7 +333,14 @@ export default function (pi: ExtensionAPI) {
       for (const f of filesToDelete) await unlink(f).catch(() => {});
 
       if (text.trim()) {
-        return { action: "transform", text };
+        const input = voiceTextToInput(text);
+        if (input.startsWith("/")) {
+          // Transform output is not re-checked for extension commands, so dispatch directly
+          ctx.ui.notify(`Voice → ${input}`, "info");
+          pi.sendUserMessage(input, { expandPromptTemplates: true });
+          return { action: "handled" };
+        }
+        return { action: "transform", text: input };
       }
 
       ctx.ui.notify("Voice: no speech detected", "warning");
