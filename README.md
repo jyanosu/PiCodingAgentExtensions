@@ -95,14 +95,14 @@ Sends a screenshot or image directly to the model as an attached image. Requires
 
 Workflow:
 1. Take a screenshot: `Win+Shift+S`
-2. Type the command below and submit — the image is attached automatically
+2. Type the command below and submit — the Windows clipboard is read directly (no `Alt+V` needed)
 
 Commands:
-- `/look` — analyze the newest clipboard screenshot (default: describe + analyze)
+- `/look` — analyze the current clipboard screenshot (default: describe + analyze)
 - `/look what's wrong with this error?` — custom question about the screenshot
 - `/look C:\path\to\img.png describe this` — explicit image file + prompt
 
-Supported formats: png, jpg/jpeg, gif, webp, bmp. Only clipboard images from the last hour are considered.
+Source priority: explicit path → Windows clipboard → newest `pi-clipboard-*` temp file (last hour). Supported formats: png, jpg/jpeg, gif, webp, bmp.
 
 ## Development
 
