@@ -42,7 +42,7 @@ Works from both `/voice` and `Alt+Q`. Trailing periods Whisper adds are stripped
 Edit `.env` file next to `index.ts`:
 
 ```
-WHISPER_URL=https://whisper.local.johnyan.net
+WHISPER_URL=https://{server}
 MIC_DEVICE=Microphone (BlackShark V3 Pro - Chat)
 ```
 
