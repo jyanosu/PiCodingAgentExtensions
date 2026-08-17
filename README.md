@@ -80,7 +80,7 @@ Voice slash commands: say **"slash" + command** (e.g. "slash look what's wrong w
 
 Config via `.env` next to the extension (see [extensions/voice-input/README.md](./extensions/voice-input/README.md)):
 ```bash
-WHISPER_URL=https://whisper.local.johnyan.net   # OpenAI-compatible /v1/audio/transcriptions
+WHISPER_URL=https://{server}   # OpenAI-compatible /v1/audio/transcriptions
 MIC_DEVICE=Microphone (Your Mic)                # optional — auto-detects first hardware mic if omitted
 SILENCE_DURATION=3                              # seconds of silence before stopping
 ```
