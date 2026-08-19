@@ -13,6 +13,9 @@ Typecheck also surfaced additional bugs, fixed alongside:
 - Invalid notify types: `"warn"` (auto-continue), `"success"` (obsidian-logger ×2) —
   valid set is `"info" | "warning" | "error"`.
 
+**Follow-up (same branch): all minor code smells + repo hygiene items below fixed.**
+Repo now has `package.json` + `tsconfig.json` with `npm run typecheck`.
+
 ## Confirmed bugs
 
 ### 1. auto-continue.ts — state persistence broken (throws on shutdown) [FIXED]
@@ -50,42 +53,42 @@ Typecheck also surfaced additional bugs, fixed alongside:
   copies **both** → both hook `session_before_compact`, double-compaction conflict.
 - Suggest deleting `compact-model.ts` (or excluding it from the install glob).
 
-## Minor issues / code smells
+## Minor issues / code smells (all FIXED on branch `updates`)
 
-### compaction-model.ts
-- Empty if block after auth check:
-  `if (!auth.apiKey && !config.baseUrl.includes("localhost") && ...) { // Allow non-localhost without key only if explicitly configured }`
-  — dead logic, does nothing (unfinished API-key check).
-- Fallback config takes `Object.values(models.providers)[0]` and assumes it's the litellm endpoint — fragile. (Typed the parsed JSON on branch `updates`; still assumes first provider is litellm.)
-- `require("node:fs")` inside `loadConfig()` in an ESM file (works under jiti, inconsistent with the rest).
+### compaction-model.ts [FIXED]
+- Empty if block after auth check (dead, unfinished API-key check) — removed.
+- Fallback assumed first provider in models.json is litellm — now prefers the
+  provider literally named `"litellm"`, falls back to first.
+- `require("node:fs")` inside an ESM file — moved to top-level imports.
 
-### voice-input/index.ts
-- `require("node:child_process")` inside `detectDefaultMic()` in an ESM file.
-- `recordAudio`: max-duration `setTimeout` is never cleared when silence settles early → pending timer kept (harmless in TUI, sloppy).
+### voice-input/index.ts [FIXED]
+- `require("node:child_process")` inside a function — moved to top-level import.
+- `recordAudio`: max-duration `setTimeout` now cleared when silence settles early.
 
-### obsidian-logger/index.ts
-- Doc comment says structure `{vault}/{projectName}/{sessionId}/MM-DD-YYYY.md`; code writes `{vault}/Projects/{projectName}/{sessionId}/...` — doc mismatch.
-- `appendToDailyFile` does full read + rewrite on every message → O(n²) I/O in long sessions; concurrent `message_end` events could race (lost entries).
-- Dead if/else: both branches do `entry += text`.
-- `message_end` for role `user` also captures tool-result messages (tool results arrive as user-role messages) → vault can bloat with raw tool output.
+### obsidian-logger/index.ts [FIXED]
+- Doc comment path mismatch — now documents `{vault}/Projects/{project}/{sessionId}/...`.
+- `appendToDailyFile` full read + rewrite per message (O(n²), race-prone) — now `appendFile`.
+- Dead if/else (both branches identical) — collapsed.
+- ~~Tool-result capture bloat~~ — **not a bug**: tool results arrive as
+  `role: "toolResult"` messages, already excluded by the role filter, and
+  `extractUserText` only takes `type: "text"` blocks.
 
-### working-indicator.ts
-- Persists mode to `~/.pi/extensions/working-indicator.json` — drops config JSON into the extensions directory alongside `.ts` files. Works, but pollutes that folder.
+### working-indicator.ts [FIXED]
+- Config moved from `~/.pi/extensions/` to the Pi config dir
+  (`$PI_CODING_AGENT_DIR || ~/.pi/agent`), consistent with compaction-model.
 
-### highlight-footer.ts
-- `ctx.ui.setWidget("token-budget", undefined)` — cross-extension coupling to `token-budget.ts`, which is not in this repo. Undocumented dependency.
+### highlight-footer.ts [FIXED]
+- `setWidget("token-budget", ...)` cross-extension coupling — documented in comment.
 
-### look.ts / voice-input
-- Windows-only by design (powershell / DirectShow). Degrade gracefully on Linux (clipboard step fails → fallbacks). Fine, but worth noting for the README.
+### look.ts / voice-input [FIXED]
+- Windows-only nature noted in README table rows.
 
-## Repo / hygiene
+## Repo / hygiene (all FIXED on branch `updates`)
 
-- `extensions/obsidian-logger/.env` is **git-tracked** despite `.gitignore` containing `.env`
-  (was committed before the ignore rule). Currently only empty values (no secrets),
-  but the pattern is a future leak vector. Consider `git rm --cached extensions/obsidian-logger/.env`.
-- README extensions table omits: auto-continue, search-browser, obsidian-logger, compact-model (the duplicate).
-- No tests, no lint/typecheck config — extensions are only validated at load time by jiti.
-  A `tsc --noEmit` pass against the pi package types would have caught bugs #1 and #2.
+- `.env` git-tracked — removed from index (`git rm --cached`); `.gitignore` keeps it out.
+- README table now lists auto-continue, search-browser, obsidian-logger (+ config sections).
+- Typecheck added: `package.json` (devDeps: pi-coding-agent, pi-ai, typescript, @types/node)
+  + `tsconfig.json` (strict) + `npm run typecheck`.
 
 ## What looks good
 

@@ -10,9 +10,12 @@ Custom extensions for [Pi Coding Agent](https://github.com/earendil-works/pi-cod
 | [compaction-model](./extensions/compaction-model.ts) | Uses a separate smaller model for session compaction and branch summarization |
 | [working-indicator](./extensions/working-indicator.ts) | Context-aware working indicator that changes based on what Pi is doing |
 | [response-latency](./extensions/response-latency.ts) | Shows response latency with color-coded speed phases |
-| [voice-input](./extensions/voice-input/) | Voice-to-text prompts via FFmpeg + faster-whisper (`/voice`, `Alt+Q`) |
+| [voice-input](./extensions/voice-input/) | Voice-to-text prompts via FFmpeg + faster-whisper (`/voice`, `Alt+Q`) — Windows (DirectShow) |
 | [clipboard-cleanup](./extensions/clipboard-cleanup.ts) | Deletes stale `pi-clipboard-*` screenshot temp files on session start |
-| [look](./extensions/look.ts) | `/look` — send clipboard screenshot (or image path) to the model as an attached image |
+| [look](./extensions/look.ts) | `/look` — send clipboard screenshot (or image path) to the model as an attached image — Windows clipboard, falls back to `pi-clipboard-*` temp files elsewhere |
+| [auto-continue](./extensions/auto-continue.ts) | Auto-sends "continue" when the model leaks unexecuted tool-call XML as text (toggle: `/autocontinue`) |
+| [search-browser](./extensions/search-browser.ts) | Toggle browser curator for `web_search` calls (`/search-browser on\|off`), persisted per session |
+| [obsidian-logger](./extensions/obsidian-logger/) | Logs prompts + responses to an Obsidian vault as Markdown (`/obsidian-logger`) |
 
 ## Installation
 
@@ -91,6 +94,24 @@ Requires: FFmpeg in PATH, a running faster-whisper server.
 
 No configuration needed. On session start, deletes `pi-clipboard-*` temp files (created by `Alt+V` image paste) older than 1 hour. Notifies when files are removed.
 
+### auto-continue
+
+On by default. Detects raw tool-call XML in assistant output (unparsed `<function=...>` blocks) and auto-sends `continue` so the model retries. Toggle with `/autocontinue`; state persists across sessions.
+
+### search-browser
+
+Controls whether `web_search` opens the interactive browser curator. `/search-browser on|off|toggle`. Choice persists in the session file.
+
+### obsidian-logger
+
+Appends user prompts and assistant responses (no thinking blocks, no tool output) to `{vault}/Projects/{project}/{sessionId}/MM-DD-YYYY.md`. Toggle with `/obsidian-logger on|off`.
+
+Config via `.env` next to the extension or environment variables:
+```bash
+OBSIDIAN_VAULT_PATH=/path/to/vault
+OBSIDIAN_LOGGER_ENABLED=true   # optional, default true
+```
+
 ### look
 
 Sends a screenshot or image directly to the model as an attached image. Requires a vision-capable model (`"input": ["text", "image"]` in `models.json`).
@@ -109,6 +130,13 @@ Source priority: explicit path → Windows clipboard → newest `pi-clipboard-*`
 ## Development
 
 Extensions use Pi's Extension API. See [Pi Extensions Docs](https://github.com/earendil-works/pi-coding-agent/docs/extensions.md) for the full API reference.
+
+Typecheck (strict, against the pi package types):
+
+```bash
+npm install
+npm run typecheck
+```
 
 ## Agents
 

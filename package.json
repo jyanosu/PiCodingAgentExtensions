@@ -1,0 +1,15 @@
+{
+  "name": "pi-coding-agent-extensions",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Custom extensions for Pi Coding Agent",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.84.2",
+    "@earendil-works/pi-ai": "^0.84.2",
+    "@types/node": "^24",
+    "typescript": "^5.6.3"
+  }
+}

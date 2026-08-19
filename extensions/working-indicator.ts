@@ -23,7 +23,8 @@ import type { ExtensionAPI, ExtensionContext, WorkingIndicatorOptions } from "@e
 
 type WorkingIndicatorMode = "dot" | "none" | "pulse" | "spinner" | "auto" | "default";
 
-const CONFIG_DIR = join(process.env.HOME || "/root", ".pi", "extensions");
+// Config lives in the Pi config dir (~/.pi/agent), not the extensions folder.
+const CONFIG_DIR = process.env.PI_CODING_AGENT_DIR || join(process.env.HOME || "/root", ".pi", "agent");
 const CONFIG_PATH = join(CONFIG_DIR, "working-indicator.json");
 
 function loadMode(): WorkingIndicatorMode {

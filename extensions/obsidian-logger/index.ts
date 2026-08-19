@@ -4,14 +4,14 @@
  * Records all user prompts and assistant responses (excluding thinking blocks)
  * to Markdown files in an Obsidian vault.
  *
- * Folder structure: {vault}/{projectName}/{sessionId}/MM-DD-YYYY.md
+ * Folder structure: {vault}/Projects/{projectName}/{sessionId}/MM-DD-YYYY.md
  *
  * Config: set OBSIDIAN_VAULT_PATH in .env file next to this extension,
  * or export OBSIDIAN_VAULT_PATH environment variable.
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -173,25 +173,12 @@ async function appendToDailyFile(ctx: ExtensionContext, vaultPath: string, proje
   const timestamp = new Date().toLocaleTimeString();
   let entry = `\n${roleLabel} (${timestamp})\n\n`;
 
-  if (role === "user") {
-    entry += `${text}\n`;
-  } else {
-    // Wrap response in markdown for readability
-    entry += `${text}\n`;
-  }
-  entry += `\n---\n`;
+  entry += `${text}\n\n---\n`;
 
   try {
-    // Check if file exists, read existing content
-    let existing = "";
-    try {
-      existing = await readFile(filePath, "utf-8");
-    } catch {
-      // File doesn't exist yet, that's fine
-    }
-
-    // Write combined content
-    await writeFile(filePath, existing + entry, "utf-8");
+    // Append directly — avoids read-modify-write (O(n²) I/O in long
+    // sessions) and lost entries when two message_end events overlap.
+    await appendFile(filePath, entry, "utf-8");
   } catch (err) {
     const msg = typeof err === "object" && err !== null && "message" in err
       ? (err as { message: string }).message

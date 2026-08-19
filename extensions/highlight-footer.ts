@@ -146,7 +146,8 @@ export default function (pi: ExtensionAPI) {
       return `${(count / 1000000).toFixed(1)}M`;
     };
 
-    // Clear any cached token-budget widget from previous extension
+    // Defensive: clear a leftover "token-budget" widget if the separate
+    // token-budget extension (not in this repo) was ever enabled.
     ctx.ui.setWidget("token-budget", undefined);
 
     ctx.ui.setFooter((tui, theme, footerData) => {
