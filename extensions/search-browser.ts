@@ -1,17 +1,19 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, SessionEntry } from "@earendil-works/pi-coding-agent";
+
+type CustomEntry = Extract<SessionEntry, { type: "custom" }>;
 
 export default function (pi: ExtensionAPI) {
   // State: false = terminal only (no browser), true = open browser curator
   let openBrowser = false;
 
   pi.on("session_start", async (_event, ctx) => {
-    // Restore state if saved
+    // Restore state from the most recent persisted entry
     const entries = ctx.sessionManager.getEntries();
-    for (const e of entries) {
-      if (e.category === "extension" && e.data?.key === "searchBrowserMode") {
-        openBrowser = e.data.value === "on";
-        break;
-      }
+    const last = [...entries].reverse().find(
+      (e): e is CustomEntry => e.type === "custom" && e.customType === "searchBrowserMode",
+    );
+    if (last && typeof last.data === "string") {
+      openBrowser = last.data === "on";
     }
     ctx.ui.notify(`Search browser: ${openBrowser ? "ON" : "OFF"}`, "info");
   });
@@ -39,6 +41,9 @@ export default function (pi: ExtensionAPI) {
       } else {
         openBrowser = !openBrowser;
       }
+
+      // Persist so the choice survives across sessions
+      pi.appendEntry("searchBrowserMode", openBrowser ? "on" : "off");
 
       ctx.ui.notify(`Search browser: ${openBrowser ? "ON (opens curator)" : "OFF (terminal only)"}`, "info");
     },

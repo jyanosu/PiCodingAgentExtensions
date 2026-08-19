@@ -9,7 +9,7 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { execFile, spawn } from "node:child_process";
+import { execFile, execSync, spawn } from "node:child_process";
 import { readFile, writeFile, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -21,7 +21,6 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 /** Detect available microphones via FFmpeg DirectShow, return first real hardware mic */
 function detectDefaultMic(): string | null {
   try {
-    const { execSync } = require("node:child_process");
     const output = execSync("ffmpeg -list_devices true -f dshow -i dummy 2>&1", { encoding: "utf8" });
     const virtualNames = ["steam", "nvidia", "virtual", "obs", "broadcast", "blackshark"];
     for (const line of output.split("\n")) {
@@ -135,6 +134,7 @@ function recordAudio(durationSeconds: number, micDevice: string, silenceDuration
     ]);
 
     let settled = false;
+    let maxTimer: ReturnType<typeof setTimeout> | undefined;
     const pcmChunks: Buffer[] = [];
     // Track silence in ~500ms windows (16000 * 0.5 * 2 = 16000 bytes per window)
     const WINDOW_BYTES = 16000;
@@ -146,6 +146,7 @@ function recordAudio(durationSeconds: number, micDevice: string, silenceDuration
     const settle = async (silenceEnd?: number) => {
       if (settled) return;
       settled = true;
+      if (maxTimer) clearTimeout(maxTimer);
       try { proc.kill(); } catch {}
 
       // Assemble WAV from collected PCM
@@ -196,7 +197,7 @@ function recordAudio(durationSeconds: number, micDevice: string, silenceDuration
       if (!settled) settle();
     });
 
-    setTimeout(() => settle(), (durationSeconds + 3) * 1000);
+    maxTimer = setTimeout(() => settle(), (durationSeconds + 3) * 1000);
     proc.on("error", reject);
   });
 }
@@ -314,10 +315,11 @@ export default function (pi: ExtensionAPI) {
     const maxDuration = parseMaxDuration(event.text);
     ctx.ui.notify(`🎙 Listening... (speak now, stops after ${config.silenceDuration}s silence)`, "info");
 
+    const filesToDelete: string[] = [];
     try {
       // Record with real-time silence detection
       const { filePath: tempFile, silenceEnd } = await recordAudio(maxDuration, config.micDevice, config.silenceDuration);
-      let filesToDelete = [tempFile];
+      filesToDelete.push(tempFile);
 
       // Trim to silence end if detected
       let audioFile = tempFile;
@@ -347,9 +349,7 @@ export default function (pi: ExtensionAPI) {
       return { action: "handled" };
     } catch (err) {
       // Clean up any temp files on error
-      if (typeof filesToDelete !== "undefined") {
-        for (const f of filesToDelete) await unlink(f).catch(() => {});
-      }
+      for (const f of filesToDelete) await unlink(f).catch(() => {});
       const msg = typeof err === "object" && err !== null && "message" in err
         ? (err as { message: string }).message
         : String(err);

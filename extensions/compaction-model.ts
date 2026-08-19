@@ -12,6 +12,9 @@
  *   COMPACTION_MODEL_MAX_TOKENS - Max tokens for summary (default: 8192)
  */
 
+import { homedir } from "node:os";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { uuidv7 } from "@earendil-works/pi-ai";
 import { complete } from "@earendil-works/pi-ai/compat";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -89,21 +92,22 @@ function loadConfig(): CompactionConfig {
   }
 
   // Fall back to reading models.json for the litellm endpoint
-  const fs = require("node:fs");
-  const path = require("node:path");
-  const os = require("node:os");
   try {
-    const configDir = process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent");
-    const modelsPath = path.join(configDir, "models.json");
-    const models = JSON.parse(fs.readFileSync(modelsPath, "utf8"));
-    const firstProvider = Object.values(models.providers)[0];
+    const configDir = process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
+    const modelsPath = join(configDir, "models.json");
+    const models = JSON.parse(readFileSync(modelsPath, "utf8")) as {
+      providers?: Record<string, { baseUrl?: string; apiKey?: string }>;
+    };
+    // Prefer the provider literally named "litellm", else the first one.
+    const providers = models.providers ?? {};
+    const litellmProvider = providers["litellm"] ?? Object.values(providers)[0];
 
-    if (firstProvider && firstProvider.baseUrl) {
+    if (litellmProvider && litellmProvider.baseUrl) {
       return {
         provider: "litellm",
         modelId: process.env.COMPACTION_MODEL_ID || "Qwen3.5-8B",
-        baseUrl: firstProvider.baseUrl,
-        apiKey: firstProvider.apiKey || undefined,
+        baseUrl: litellmProvider.baseUrl,
+        apiKey: litellmProvider.apiKey || undefined,
         maxTokens: 8192,
       };
     }
@@ -165,9 +169,6 @@ export default async function (pi: ExtensionAPI) {
 
     const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
     if (!auth.ok) throw new Error(`Auth failed: ${auth.error}`);
-    if (!auth.apiKey && !config.baseUrl.includes("localhost") && !config.baseUrl.startsWith("http://127")) {
-      // Allow non-localhost without key only if explicitly configured
-    }
 
     const allMessages = [...messagesToSummarize, ...(turnPrefixMessages || [])];
     const conversationText = serializeConversation(convertToLlm(allMessages as any));

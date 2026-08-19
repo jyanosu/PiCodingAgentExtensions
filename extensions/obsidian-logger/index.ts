@@ -4,19 +4,26 @@
  * Records all user prompts and assistant responses (excluding thinking blocks)
  * to Markdown files in an Obsidian vault.
  *
- * Folder structure: {vault}/{projectName}/{sessionId}/MM-DD-YYYY.md
+ * Folder structure: {root}/Projects/{projectName}/{sessionId}/MM-DD-YYYY.md
+ * where {root} is the Obsidian vault by default, or the OS temp directory
+ * (os.tmpdir()/pi-obsidian-logger) when switched via /obsidian-logger tmp.
  *
  * Config: set OBSIDIAN_VAULT_PATH in .env file next to this extension,
  * or export OBSIDIAN_VAULT_PATH environment variable.
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { parseSkillBlock } from "@earendil-works/pi-coding-agent";
+import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { tmpdir } from "node:os";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+
+/** Temp-directory target root (OS-managed: %TEMP% on Windows, /tmp on Linux) */
+const TMP_ROOT = join(tmpdir(), "pi-obsidian-logger");
 
 type ContentBlock = {
   type?: string;
@@ -115,6 +122,17 @@ function extractUserText(content: unknown): string {
   return parts.join("\n");
 }
 
+/**
+ * If the text is an expanded skill command (<skill ...>block</skill> + args),
+ * reduce it to what the user actually typed (/skill:name args) so the vault
+ * doesn't get filled with full SKILL.md bodies.
+ */
+function stripSkillExpansion(text: string): string {
+  const skill = parseSkillBlock(text);
+  if (!skill) return text;
+  return skill.userMessage ? `/skill:${skill.name} ${skill.userMessage}` : `/skill:${skill.name}`;
+}
+
 /** Extract assistant text (excluding thinking blocks and tool calls) */
 function extractAssistantText(content: unknown): string {
   if (!Array.isArray(content)) return "";
@@ -165,33 +183,20 @@ async function appendToDailyFile(ctx: ExtensionContext, vaultPath: string, proje
   const folderPath = join(vaultPath, "Projects", projectName, sessionId);
   const filePath = join(folderPath, fileName);
 
-  // Create folders if missing
-  await mkdir(folderPath, { recursive: true });
-
   // Build markdown entry
   const roleLabel = role === "user" ? "## 👤 Prompt" : "## 🤖 Response";
   const timestamp = new Date().toLocaleTimeString();
   let entry = `\n${roleLabel} (${timestamp})\n\n`;
 
-  if (role === "user") {
-    entry += `${text}\n`;
-  } else {
-    // Wrap response in markdown for readability
-    entry += `${text}\n`;
-  }
-  entry += `\n---\n`;
+  entry += `${text}\n\n---\n`;
 
   try {
-    // Check if file exists, read existing content
-    let existing = "";
-    try {
-      existing = await readFile(filePath, "utf-8");
-    } catch {
-      // File doesn't exist yet, that's fine
-    }
-
-    // Write combined content
-    await writeFile(filePath, existing + entry, "utf-8");
+    // Create folders if missing (kept inside try: a bad vault path must
+    // notify, not crash the agent via unhandled rejection)
+    await mkdir(folderPath, { recursive: true });
+    // Append directly — avoids read-modify-write (O(n²) I/O in long
+    // sessions) and lost entries when two message_end events overlap.
+    await appendFile(filePath, entry, "utf-8");
   } catch (err) {
     const msg = typeof err === "object" && err !== null && "message" in err
       ? (err as { message: string }).message
@@ -206,59 +211,81 @@ async function appendToDailyFile(ctx: ExtensionContext, vaultPath: string, proje
 export default function (pi: ExtensionAPI) {
   let enabled = true;
   let vaultPath: string | undefined;
+  let logTarget: "vault" | "tmp" = "vault";
   let projectName: string = "";
   let sessionId: string = "";
   let readmeChecked = false;
 
   pi.on("session_start", async (_event, ctx) => {
     enabled = readEnabledFromConfig();
+    logTarget = "vault";
 
     if (!enabled) {
       console.log("[obsidian-logger] Logger disabled (OBSIDIAN_LOGGER_ENABLED not set or false).");
-      ctx.ui.notify(`Obsidian logger: OFF`, "warning");
+      if (ctx.hasUI) ctx.ui.notify(`Obsidian logger: OFF`, "warning");
       return;
     }
 
     vaultPath = getVaultPath();
-    if (!vaultPath) {
-      console.log("[obsidian-logger] OBSIDIAN_VAULT_PATH not set. Set it in .env file next to the extension or as an environment variable.");
-      ctx.ui.notify(`Obsidian logger: ON (no vault path set)`, "info");
-      return;
-    }
-
     projectName = getProjectName(ctx.cwd);
     sessionId = ctx.sessionManager.getSessionId();
 
+    if (!vaultPath) {
+      console.log("[obsidian-logger] OBSIDIAN_VAULT_PATH not set. Set it in .env file next to the extension or as an environment variable, or use /obsidian-logger tmp to log to the temp directory.");
+      if (ctx.hasUI) ctx.ui.notify(`Obsidian logger: ON (no vault path set — use /obsidian-logger tmp)`, "info");
+      return;
+    }
+
     const folderPath = join(vaultPath, "Projects", projectName, sessionId);
     console.log(`[obsidian-logger] Logging to: ${folderPath}`);
-    ctx.ui.notify(`Obsidian logger: ON`, "success");
+    if (ctx.hasUI) ctx.ui.notify(`Obsidian logger: ON (target: vault)`, "info");
   });
 
   // Capture user prompts and assistant responses
   pi.on("message_end", async (event, ctx) => {
-    if (!enabled || !vaultPath || !sessionId) return;
+    if (!enabled || !sessionId) return;
+
+    const root = logTarget === "tmp" ? TMP_ROOT : vaultPath;
+    if (!root) return;
 
     const role = event.message.role;
     if (role !== "user" && role !== "assistant") return;
 
     const text = role === "user"
-      ? extractUserText(event.message.content)
+      ? stripSkillExpansion(extractUserText(event.message.content))
       : extractAssistantText(event.message.content);
 
-    // Ensure README.md exists on first log of session
-    if (!readmeChecked) {
+    // Ensure README.md exists on first vault write of session (never in temp mode)
+    if (logTarget === "vault" && !readmeChecked) {
       readmeChecked = true;
-      await ensureProjectReadme(vaultPath, projectName);
+      await ensureProjectReadme(root, projectName);
     }
 
-    await appendToDailyFile(ctx, vaultPath, projectName, sessionId, role, text);
+    await appendToDailyFile(ctx, root, projectName, sessionId, role, text);
   });
 
-  // Command to toggle: /obsidian-logger [on|off|toggle]
+  // Command: /obsidian-logger [on|off|tmp|vault] (no arg = toggle on/off)
   pi.registerCommand("obsidian-logger", {
-    description: "Toggle Obsidian logging on or off",
+    description: "Toggle Obsidian logging (on|off) or switch target (tmp|vault)",
     handler: async (args, ctx) => {
       const arg = (args || "").trim().toLowerCase();
+      const onOff = enabled ? "ON" : "OFF";
+
+      if (arg === "tmp") {
+        logTarget = "tmp";
+        if (ctx.hasUI) ctx.ui.notify(`Obsidian logger: ${onOff} (target: tmp) — logging to ${TMP_ROOT}`, "info");
+        return;
+      }
+
+      if (arg === "vault") {
+        if (!vaultPath) {
+          if (ctx.hasUI) ctx.ui.notify(`No vault configured — staying in tmp mode`, "warning");
+          return;
+        }
+        logTarget = "vault";
+        if (ctx.hasUI) ctx.ui.notify(`Obsidian logger: ${onOff} (target: vault) — logging to ${join(vaultPath, "Projects", projectName)}`, "info");
+        return;
+      }
 
       if (arg === "on") {
         enabled = true;
@@ -268,7 +295,7 @@ export default function (pi: ExtensionAPI) {
         enabled = !enabled;
       }
 
-      ctx.ui.notify(`Obsidian logger: ${enabled ? "ON" : "OFF"}`, enabled ? "success" : "warning");
+      if (ctx.hasUI) ctx.ui.notify(`Obsidian logger: ${enabled ? "ON" : "OFF"} (target: ${logTarget})`, enabled ? "info" : "warning");
     },
   });
 }
