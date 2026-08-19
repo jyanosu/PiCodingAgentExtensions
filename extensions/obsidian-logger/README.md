@@ -54,6 +54,22 @@ current session's logging to the OS temp directory:
   `systemd-tmpfiles` age policies on Linux) — treat temp logs as best-effort scratch,
   not guaranteed deletion.
 
+### Log Reasoning (Thinking)
+
+Assistant thinking blocks are **excluded by default**. To also log the model's
+reasoning for the current session:
+
+| Command | Action |
+|---|---|
+| `/obsidian-logger thinking` | Toggle reasoning logging on/off |
+| `/obsidian-logger thinking on` | Enable reasoning logging |
+| `/obsidian-logger thinking off` | Disable reasoning logging |
+
+- **Off by default**: every new Pi session starts with reasoning logging off.
+- **Session-only**: the flag is not persisted; it lasts until the session ends.
+- Reasoning appears inside a foldable `<details>🧠 Reasoning</details>` block
+  within the response entry, so the visible answer stays uncluttered.
+
 ## Folder Structure
 
 ```
@@ -81,6 +97,13 @@ Your prompt text here...
 
 ## 🤖 Response (10:30:50 AM)
 
+<details>
+<summary>🧠 Reasoning</summary>
+
+Model thinking text here... (only when `/obsidian-logger thinking` is on)
+
+</details>
+
 Assistant response text here...
 
 ---
@@ -88,7 +111,7 @@ Assistant response text here...
 
 ## Notes
 
-- Thinking blocks are excluded (only visible responses logged)
+- Thinking blocks are excluded by default; enable per session with `/obsidian-logger thinking`
 - Multiple entries on same day append to same file
 - Folders created automatically if missing
 - Failures are silent — won't disrupt your session

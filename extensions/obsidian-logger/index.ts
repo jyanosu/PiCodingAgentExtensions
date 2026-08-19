@@ -8,6 +8,9 @@
  * where {root} is the Obsidian vault by default, or the OS temp directory
  * (os.tmpdir()/pi-obsidian-logger) when switched via /obsidian-logger tmp.
  *
+ * Assistant reasoning (thinking blocks) is excluded by default; enable it
+ * per session with /obsidian-logger thinking.
+ *
  * Config: set OBSIDIAN_VAULT_PATH in .env file next to this extension,
  * or export OBSIDIAN_VAULT_PATH environment variable.
  */
@@ -133,17 +136,20 @@ function stripSkillExpansion(text: string): string {
   return skill.userMessage ? `/skill:${skill.name} ${skill.userMessage}` : `/skill:${skill.name}`;
 }
 
-/** Extract assistant text (excluding thinking blocks and tool calls) */
-function extractAssistantText(content: unknown): string {
+/** Extract assistant text (excluding tool calls; thinking only when included) */
+function extractAssistantText(content: unknown, includeThinking = false): string {
   if (!Array.isArray(content)) return "";
 
   const parts: string[] = [];
   for (const block of content) {
     if (!block || typeof block !== "object") continue;
     const b = block as ContentBlock;
-    // Only include text blocks, skip thinking and tool calls
-    if (b.type === "text" && typeof b.text === "string") {
+    if (typeof b.text !== "string") continue;
+    if (b.type === "text") {
       parts.push(b.text);
+    } else if (includeThinking && b.type === "thinking") {
+      // Foldable in Obsidian; keeps the visible response uncluttered
+      parts.push(`<details>\n<summary>🧠 Reasoning</summary>\n\n${b.text}\n\n</details>`);
     }
   }
   return parts.join("\n");
@@ -212,17 +218,22 @@ export default function (pi: ExtensionAPI) {
   let enabled = true;
   let vaultPath: string | undefined;
   let logTarget: "vault" | "tmp" = "vault";
+  let logThinking = false;
   let projectName: string = "";
   let sessionId: string = "";
   let readmeChecked = false;
 
+  /** Full state string for notifications */
+  const state = () => `${enabled ? "ON" : "OFF"} (target: ${logTarget}, thinking: ${logThinking ? "on" : "off"})`;
+
   pi.on("session_start", async (_event, ctx) => {
     enabled = readEnabledFromConfig();
     logTarget = "vault";
+    logThinking = false;
 
     if (!enabled) {
       console.log("[obsidian-logger] Logger disabled (OBSIDIAN_LOGGER_ENABLED not set or false).");
-      if (ctx.hasUI) ctx.ui.notify(`Obsidian logger: OFF`, "warning");
+      if (ctx.hasUI) ctx.ui.notify(`Obsidian logger: ${state()}`, "warning");
       return;
     }
 
@@ -232,13 +243,13 @@ export default function (pi: ExtensionAPI) {
 
     if (!vaultPath) {
       console.log("[obsidian-logger] OBSIDIAN_VAULT_PATH not set. Set it in .env file next to the extension or as an environment variable, or use /obsidian-logger tmp to log to the temp directory.");
-      if (ctx.hasUI) ctx.ui.notify(`Obsidian logger: ON (no vault path set — use /obsidian-logger tmp)`, "info");
+      if (ctx.hasUI) ctx.ui.notify(`Obsidian logger: ${state()} (no vault path set — use /obsidian-logger tmp)`, "info");
       return;
     }
 
     const folderPath = join(vaultPath, "Projects", projectName, sessionId);
     console.log(`[obsidian-logger] Logging to: ${folderPath}`);
-    if (ctx.hasUI) ctx.ui.notify(`Obsidian logger: ON (target: vault)`, "info");
+    if (ctx.hasUI) ctx.ui.notify(`Obsidian logger: ${state()}`, "info");
   });
 
   // Capture user prompts and assistant responses
@@ -253,7 +264,7 @@ export default function (pi: ExtensionAPI) {
 
     const text = role === "user"
       ? stripSkillExpansion(extractUserText(event.message.content))
-      : extractAssistantText(event.message.content);
+      : extractAssistantText(event.message.content, logThinking);
 
     // Ensure README.md exists on first vault write of session (never in temp mode)
     if (logTarget === "vault" && !readmeChecked) {
@@ -264,16 +275,15 @@ export default function (pi: ExtensionAPI) {
     await appendToDailyFile(ctx, root, projectName, sessionId, role, text);
   });
 
-  // Command: /obsidian-logger [on|off|tmp|vault] (no arg = toggle on/off)
+  // Command: /obsidian-logger [on|off|tmp|vault|thinking [on|off]] (no arg = toggle on/off)
   pi.registerCommand("obsidian-logger", {
-    description: "Toggle Obsidian logging (on|off) or switch target (tmp|vault)",
+    description: "Toggle logging (on|off), switch target (tmp|vault), or log reasoning (thinking [on|off])",
     handler: async (args, ctx) => {
       const arg = (args || "").trim().toLowerCase();
-      const onOff = enabled ? "ON" : "OFF";
 
       if (arg === "tmp") {
         logTarget = "tmp";
-        if (ctx.hasUI) ctx.ui.notify(`Obsidian logger: ${onOff} (target: tmp) — logging to ${TMP_ROOT}`, "info");
+        if (ctx.hasUI) ctx.ui.notify(`Obsidian logger: ${state()} — logging to ${TMP_ROOT}`, "info");
         return;
       }
 
@@ -283,7 +293,16 @@ export default function (pi: ExtensionAPI) {
           return;
         }
         logTarget = "vault";
-        if (ctx.hasUI) ctx.ui.notify(`Obsidian logger: ${onOff} (target: vault) — logging to ${join(vaultPath, "Projects", projectName)}`, "info");
+        if (ctx.hasUI) ctx.ui.notify(`Obsidian logger: ${state()} — logging to ${join(vaultPath, "Projects", projectName)}`, "info");
+        return;
+      }
+
+      if (arg === "thinking" || arg.startsWith("thinking ")) {
+        const sub = arg.split(" ")[1];
+        if (sub === "on") logThinking = true;
+        else if (sub === "off") logThinking = false;
+        else logThinking = !logThinking;
+        if (ctx.hasUI) ctx.ui.notify(`Obsidian logger: ${state()} — reasoning ${logThinking ? "now logged" : "no longer logged"}`, "info");
         return;
       }
 
@@ -295,7 +314,7 @@ export default function (pi: ExtensionAPI) {
         enabled = !enabled;
       }
 
-      if (ctx.hasUI) ctx.ui.notify(`Obsidian logger: ${enabled ? "ON" : "OFF"} (target: ${logTarget})`, enabled ? "info" : "warning");
+      if (ctx.hasUI) ctx.ui.notify(`Obsidian logger: ${state()}`, enabled ? "info" : "warning");
     },
   });
 }
