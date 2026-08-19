@@ -1,6 +1,7 @@
 # Obsidian Logger Extension for Pi
 
-Records all prompts and responses to Markdown files in your Obsidian vault.
+Records all prompts and responses to Markdown files in your Obsidian vault —
+or, per session, in the OS temp directory (cleared by the system over time).
 
 ## Setup
 
@@ -32,15 +33,36 @@ Use the `/obsidian-logger` command to toggle logging without restarting:
 | `/obsidian-logger on` | Enable logging |
 | `/obsidian-logger off` | Disable logging |
 
-A notification shows the current state when Pi loads and after each toggle.
+A notification shows the current state when Pi loads and after each change.
+
+### Switch Target (Temp vs Vault)
+
+By default, logs go to your Obsidian vault. For scratch sessions, switch the
+current session's logging to the OS temp directory:
+
+| Command | Action |
+|---|---|
+| `/obsidian-logger tmp` | Log this session to `{tmpdir}/pi-obsidian-logger/...` |
+| `/obsidian-logger vault` | Switch back to the configured vault |
+
+- **Session-only**: the switch is not persisted. Every new session starts at the vault.
+- **No vault needed**: `tmp` mode works even when `OBSIDIAN_VAULT_PATH` is unset.
+- **Not retroactive**: entries already written stay where they were.
+- **No `README.md`** is created in temp mode.
+- Temp location: `%TEMP%/pi-obsidian-logger` on Windows, `/tmp/pi-obsidian-logger` on Linux.
+  The OS reclaims these over time (Storage Sense / Disk Cleanup on Windows; reboot or
+  `systemd-tmpfiles` age policies on Linux) — treat temp logs as best-effort scratch,
+  not guaranteed deletion.
 
 ## Folder Structure
 
 ```
-{vault}/{projectName}/{sessionId}/MM-DD-YYYY.md
+{root}/Projects/{projectName}/{sessionId}/MM-DD-YYYY.md
 ```
 
-Example: `C:/Vault/eVETAssist/abc123-def456/06-15-2025.md`
+`{root}` is your vault by default, or `{tmpdir}/pi-obsidian-logger` in temp mode.
+
+Example: `C:/Vault/Projects/eVETAssist/abc123-def456/06-15-2025.md`
 
 - **Project name**: Last directory component of your working directory
 - **Session ID**: Unique Pi session UUID
