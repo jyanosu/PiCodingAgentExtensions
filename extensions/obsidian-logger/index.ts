@@ -222,7 +222,7 @@ export default function (pi: ExtensionAPI) {
 
     if (!enabled) {
       console.log("[obsidian-logger] Logger disabled (OBSIDIAN_LOGGER_ENABLED not set or false).");
-      ctx.ui.notify(`Obsidian logger: OFF`, "warning");
+      if (ctx.hasUI) ctx.ui.notify(`Obsidian logger: OFF`, "warning");
       return;
     }
 
@@ -232,13 +232,13 @@ export default function (pi: ExtensionAPI) {
 
     if (!vaultPath) {
       console.log("[obsidian-logger] OBSIDIAN_VAULT_PATH not set. Set it in .env file next to the extension or as an environment variable, or use /obsidian-logger tmp to log to the temp directory.");
-      ctx.ui.notify(`Obsidian logger: ON (no vault path set — use /obsidian-logger tmp)`, "info");
+      if (ctx.hasUI) ctx.ui.notify(`Obsidian logger: ON (no vault path set — use /obsidian-logger tmp)`, "info");
       return;
     }
 
     const folderPath = join(vaultPath, "Projects", projectName, sessionId);
     console.log(`[obsidian-logger] Logging to: ${folderPath}`);
-    ctx.ui.notify(`Obsidian logger: ON (target: vault)`, "info");
+    if (ctx.hasUI) ctx.ui.notify(`Obsidian logger: ON (target: vault)`, "info");
   });
 
   // Capture user prompts and assistant responses
@@ -273,17 +273,17 @@ export default function (pi: ExtensionAPI) {
 
       if (arg === "tmp") {
         logTarget = "tmp";
-        ctx.ui.notify(`Obsidian logger: ${onOff} (target: tmp) — logging to ${TMP_ROOT}`, "info");
+        if (ctx.hasUI) ctx.ui.notify(`Obsidian logger: ${onOff} (target: tmp) — logging to ${TMP_ROOT}`, "info");
         return;
       }
 
       if (arg === "vault") {
         if (!vaultPath) {
-          ctx.ui.notify(`No vault configured — staying in tmp mode`, "warning");
+          if (ctx.hasUI) ctx.ui.notify(`No vault configured — staying in tmp mode`, "warning");
           return;
         }
         logTarget = "vault";
-        ctx.ui.notify(`Obsidian logger: ${onOff} (target: vault) — logging to ${join(vaultPath, "Projects", projectName)}`, "info");
+        if (ctx.hasUI) ctx.ui.notify(`Obsidian logger: ${onOff} (target: vault) — logging to ${join(vaultPath, "Projects", projectName)}`, "info");
         return;
       }
 
@@ -295,7 +295,7 @@ export default function (pi: ExtensionAPI) {
         enabled = !enabled;
       }
 
-      ctx.ui.notify(`Obsidian logger: ${enabled ? "ON" : "OFF"} (target: ${logTarget})`, enabled ? "info" : "warning");
+      if (ctx.hasUI) ctx.ui.notify(`Obsidian logger: ${enabled ? "ON" : "OFF"} (target: ${logTarget})`, enabled ? "info" : "warning");
     },
   });
 }
