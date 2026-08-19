@@ -231,7 +231,7 @@ export default function (pi: ExtensionAPI) {
 
     const folderPath = join(vaultPath, "Projects", projectName, sessionId);
     console.log(`[obsidian-logger] Logging to: ${folderPath}`);
-    ctx.ui.notify(`Obsidian logger: ON`, "success");
+    ctx.ui.notify(`Obsidian logger: ON`, "info");
   });
 
   // Capture user prompts and assistant responses
@@ -268,7 +268,7 @@ export default function (pi: ExtensionAPI) {
         enabled = !enabled;
       }
 
-      ctx.ui.notify(`Obsidian logger: ${enabled ? "ON" : "OFF"}`, enabled ? "success" : "warning");
+      ctx.ui.notify(`Obsidian logger: ${enabled ? "ON" : "OFF"}`, enabled ? "info" : "warning");
     },
   });
 }

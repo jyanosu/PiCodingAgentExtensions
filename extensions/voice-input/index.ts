@@ -314,10 +314,11 @@ export default function (pi: ExtensionAPI) {
     const maxDuration = parseMaxDuration(event.text);
     ctx.ui.notify(`🎙 Listening... (speak now, stops after ${config.silenceDuration}s silence)`, "info");
 
+    const filesToDelete: string[] = [];
     try {
       // Record with real-time silence detection
       const { filePath: tempFile, silenceEnd } = await recordAudio(maxDuration, config.micDevice, config.silenceDuration);
-      let filesToDelete = [tempFile];
+      filesToDelete.push(tempFile);
 
       // Trim to silence end if detected
       let audioFile = tempFile;
@@ -347,9 +348,7 @@ export default function (pi: ExtensionAPI) {
       return { action: "handled" };
     } catch (err) {
       // Clean up any temp files on error
-      if (typeof filesToDelete !== "undefined") {
-        for (const f of filesToDelete) await unlink(f).catch(() => {});
-      }
+      for (const f of filesToDelete) await unlink(f).catch(() => {});
       const msg = typeof err === "object" && err !== null && "message" in err
         ? (err as { message: string }).message
         : String(err);

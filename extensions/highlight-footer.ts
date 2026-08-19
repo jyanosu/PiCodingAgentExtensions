@@ -78,16 +78,18 @@ export default function (pi: ExtensionAPI) {
         const newStaged = stagedResult?.length ?? 0;
         const newUnstaged = unstagedResult?.length ?? 0;
         const newBranch = branchResult?.[0] || null;
-        const newUnpushed = parseInt(unpushedResult?.[0], 10) || 0;
+        const newUnpushed = parseInt(unpushedResult?.[0] ?? "", 10) || 0;
 
         // Parse working tree from porcelain output.
+        // Format: XY PATH — X = index status, Y = worktree status.
         const lines = porcelains || [];
         let newAdded = 0, newModified = 0, newDeleted = 0;
         for (const line of lines) {
-          const status = line.substring(0, 2).replace(/[ DCMR]/g, "").trim();
-          if (status.includes("A") || status.includes("?")) newAdded++;
-          else if (status.includes("M")) newModified++;
-          else if (status.includes("D")) newDeleted++;
+          const x = line[0];
+          const y = line[1];
+          if (x === "?" || x === "A") newAdded++;
+          else if (y === "M") newModified++;
+          else if (y === "D") newDeleted++;
         }
 
         const commit = commitResult?.[0] || null;
@@ -239,8 +241,8 @@ export default function (pi: ExtensionAPI) {
       };
     });
 
-    // Cleanup on session end.
-    pi.on("session_end", () => {
+    // Cleanup on session shutdown.
+    pi.on("session_shutdown", () => {
       isDisposed = true;
       clearInterval(timerId);
       tuiHandle = null;

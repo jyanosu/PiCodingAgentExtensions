@@ -1,4 +1,6 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, SessionEntry } from "@earendil-works/pi-coding-agent";
+
+type CustomEntry = Extract<SessionEntry, { type: "custom" }>;
 
 /**
  * Auto-Continue Extension
@@ -24,11 +26,13 @@ export default function (pi: ExtensionAPI) {
   let enabled = true;
 
   pi.on("session_start", (_event, ctx) => {
-    // Restore state if available
+    // Restore state from the most recent persisted entry
     const entries = ctx.sessionManager.getEntries();
-    const last = entries.find(e => e.customType === "auto-continue-state");
-    if (last && typeof (last as any).content === "string") {
-      enabled = (last as any).content === "on";
+    const last = [...entries].reverse().find(
+      (e): e is CustomEntry => e.type === "custom" && e.customType === "auto-continue-state",
+    );
+    if (last && typeof last.data === "string") {
+      enabled = last.data === "on";
     }
   });
 
@@ -58,14 +62,9 @@ export default function (pi: ExtensionAPI) {
     }, 800);
   });
 
-  pi.on("session_shutdown", (_event, ctx) => {
-    // Persist state
-    ctx.sessionManager.appendEntry({
-      role: "system" as any,
-      customType: "auto-continue-state",
-      content: enabled ? "on" : "off",
-      timestamp: Date.now(),
-    });
+  pi.on("session_shutdown", () => {
+    // Persist state (CustomEntry: { customType, data })
+    pi.appendEntry("auto-continue-state", enabled ? "on" : "off");
   });
 
   // Toggle command
@@ -73,7 +72,7 @@ export default function (pi: ExtensionAPI) {
     description: "Toggle auto-continue for raw tool-call XML",
     handler: async (_args, ctx) => {
       enabled = !enabled;
-      ctx.ui.notify(`auto-continue: ${enabled ? "ON" : "OFF"}`, enabled ? "info" : "warn");
+      ctx.ui.notify(`auto-continue: ${enabled ? "ON" : "OFF"}`, enabled ? "info" : "warning");
     },
   });
 }

@@ -95,8 +95,10 @@ function loadConfig(): CompactionConfig {
   try {
     const configDir = process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent");
     const modelsPath = path.join(configDir, "models.json");
-    const models = JSON.parse(fs.readFileSync(modelsPath, "utf8"));
-    const firstProvider = Object.values(models.providers)[0];
+    const models = JSON.parse(fs.readFileSync(modelsPath, "utf8")) as {
+      providers?: Record<string, { baseUrl?: string; apiKey?: string }>;
+    };
+    const firstProvider = Object.values(models.providers ?? {})[0];
 
     if (firstProvider && firstProvider.baseUrl) {
       return {

@@ -83,7 +83,7 @@ export default function (pi: ExtensionAPI) {
     stopTracking(ctx);
   });
 
-  pi.on("session_end", () => {
+  pi.on("session_shutdown", () => {
     clearTimer();
     messageStart = 0;
   });
