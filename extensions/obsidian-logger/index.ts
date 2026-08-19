@@ -11,6 +11,7 @@
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { parseSkillBlock } from "@earendil-works/pi-coding-agent";
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { readFileSync } from "node:fs";
@@ -113,6 +114,17 @@ function extractUserText(content: unknown): string {
     }
   }
   return parts.join("\n");
+}
+
+/**
+ * If the text is an expanded skill command (<skill ...>block</skill> + args),
+ * reduce it to what the user actually typed (/skill:name args) so the vault
+ * doesn't get filled with full SKILL.md bodies.
+ */
+function stripSkillExpansion(text: string): string {
+  const skill = parseSkillBlock(text);
+  if (!skill) return text;
+  return skill.userMessage ? `/skill:${skill.name} ${skill.userMessage}` : `/skill:${skill.name}`;
 }
 
 /** Extract assistant text (excluding thinking blocks and tool calls) */
@@ -229,7 +241,7 @@ export default function (pi: ExtensionAPI) {
     if (role !== "user" && role !== "assistant") return;
 
     const text = role === "user"
-      ? extractUserText(event.message.content)
+      ? stripSkillExpansion(extractUserText(event.message.content))
       : extractAssistantText(event.message.content);
 
     // Ensure README.md exists on first log of session
