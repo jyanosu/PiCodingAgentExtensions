@@ -183,9 +183,6 @@ async function appendToDailyFile(ctx: ExtensionContext, vaultPath: string, proje
   const folderPath = join(vaultPath, "Projects", projectName, sessionId);
   const filePath = join(folderPath, fileName);
 
-  // Create folders if missing
-  await mkdir(folderPath, { recursive: true });
-
   // Build markdown entry
   const roleLabel = role === "user" ? "## 👤 Prompt" : "## 🤖 Response";
   const timestamp = new Date().toLocaleTimeString();
@@ -194,6 +191,9 @@ async function appendToDailyFile(ctx: ExtensionContext, vaultPath: string, proje
   entry += `${text}\n\n---\n`;
 
   try {
+    // Create folders if missing (kept inside try: a bad vault path must
+    // notify, not crash the agent via unhandled rejection)
+    await mkdir(folderPath, { recursive: true });
     // Append directly — avoids read-modify-write (O(n²) I/O in long
     // sessions) and lost entries when two message_end events overlap.
     await appendFile(filePath, entry, "utf-8");
