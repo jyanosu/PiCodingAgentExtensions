@@ -17,11 +17,12 @@
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { parseSkillBlock } from "@earendil-works/pi-coding-agent";
-import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, open, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
+import { execFile } from "node:child_process";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -180,6 +181,43 @@ async function ensureProjectReadme(vaultPath: string, projectName: string): Prom
   }
 }
 
+/** Best-effort git branch of cwd (undefined when not a git repo) */
+function getGitBranch(cwd: string): Promise<string | undefined> {
+  return new Promise((resolve) => {
+    execFile("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd, timeout: 2000 }, (err, stdout) => {
+      resolve(err ? undefined : stdout.trim() || undefined);
+    });
+  });
+}
+
+/** Minimal YAML quoting for frontmatter values */
+function yq(v: string): string {
+  const Q = String.fromCharCode(34); // double quote
+  const B = String.fromCharCode(92); // backslash
+  if (!v.includes(Q) && !v.includes(":") && !v.includes("#")) return v;
+  return Q + v.split(Q).join(B + Q) + Q;
+}
+
+/** YAML frontmatter written once when a daily file is first created */
+async function buildFrontmatter(ctx: ExtensionContext, projectName: string, sessionId: string): Promise<string> {
+  const model = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "unknown";
+  const branch = await getGitBranch(ctx.cwd);
+  const lines = [
+    "---",
+    `project: ${yq(projectName)}`,
+    `session: ${yq(sessionId)}`,
+    `model: ${yq(model)}`,
+    `cwd: ${yq(ctx.cwd)}`,
+  ];
+  if (branch) lines.push(`branch: ${yq(branch)}`);
+  lines.push(`created: ${new Date().toISOString()}`);
+  lines.push("---");
+  return `${lines.join("\n")}\n\n`;
+}
+
+/** In-flight frontmatter creation per file path (serializes concurrent first writes) */
+const fileCreations = new Map<string, Promise<void>>();
+
 /** Append content to the daily MD file */
 async function appendToDailyFile(ctx: ExtensionContext, vaultPath: string, projectName: string, sessionId: string, role: string, text: string): Promise<void> {
   if (!text.trim()) return;
@@ -200,6 +238,28 @@ async function appendToDailyFile(ctx: ExtensionContext, vaultPath: string, proje
     // Create folders if missing (kept inside try: a bad vault path must
     // notify, not crash the agent via unhandled rejection)
     await mkdir(folderPath, { recursive: true });
+    // Write frontmatter exactly once per file. Creation is serialized per
+    // file path: the winner does exclusive open + frontmatter via handle,
+    // concurrent events await the same promise, then append — so the
+    // frontmatter is in the file before any entry can land.
+    let creation = fileCreations.get(filePath);
+    if (!creation) {
+      creation = (async () => {
+        try {
+          const fh = await open(filePath, "wx");
+          try {
+            await fh.writeFile(await buildFrontmatter(ctx, projectName, sessionId), "utf-8");
+          } finally {
+            await fh.close();
+          }
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+        }
+      })();
+      fileCreations.set(filePath, creation);
+      void creation.finally(() => fileCreations.delete(filePath));
+    }
+    await creation;
     // Append directly — avoids read-modify-write (O(n²) I/O in long
     // sessions) and lost entries when two message_end events overlap.
     await appendFile(filePath, entry, "utf-8");

@@ -86,9 +86,19 @@ Example: `C:/Vault/Projects/eVETAssist/abc123-def456/06-15-2025.md`
 
 ## Markdown Format
 
-Each entry is a section with timestamp:
+Each daily file starts with YAML frontmatter (written once, on file
+creation), then entries with timestamps:
 
 ```markdown
+---
+project: PiCodingAgentExtensions
+session: 01a01a33-92d7-7ae7-9a17-1b2b7e07e225
+model: anthropic/claude-sonnet-4-5
+branch: main
+cwd: /projects/PiCodingAgentExtensions
+created: 2026-08-19T13:30:00.000Z
+---
+
 ## 👤 Prompt (10:30:45 AM)
 
 Your prompt text here...
@@ -108,6 +118,16 @@ Assistant response text here...
 
 ---
 ```
+
+Frontmatter fields:
+
+- **project / session**: as in the folder structure
+- **model**: `provider/model-id` of the current model at file creation (`unknown` if unavailable)
+- **branch**: current git branch, omitted when cwd is not a git repo
+- **cwd**: working directory at file creation
+- **created**: ISO timestamp of first write
+
+Files created before frontmatter support have none (not backfilled).
 
 ## Notes
 
