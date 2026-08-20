@@ -1,18 +1,26 @@
 // Behavior tests for voice-input (run: node tests/voice-input.test.mjs)
 // Covers: pure helpers, recordAudio stop() wiring, and the Alt+Q toggle state machine.
 import assert from "node:assert";
-import { readdir, readFile, unlink } from "node:fs/promises";
+import { mkdir, readdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import voiceExt, { recordAudio, voiceTextToInput, parseMaxDuration } from "../extensions/voice-input/index.ts";
+import { join } from "node:path";
+import voiceExt, {
+  recordAudio,
+  voiceTextToInput,
+  parseMaxDuration,
+} from "../extensions/voice-input/index.ts";
 
 let passed = 0;
-const ok = (name) => { passed++; console.log(`  ok - ${name}`); };
+const ok = (name) => {
+  passed++;
+  console.log(`  ok - ${name}`);
+};
 
 async function waitFor(fn, timeoutMs = 15000, intervalMs = 20) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     if (fn()) return true;
-    await new Promise(r => setTimeout(r, intervalMs));
+    await new Promise((r) => setTimeout(r, intervalMs));
   }
   return fn();
 }
@@ -41,19 +49,33 @@ ok("parseMaxDuration defaults 20s, caps 60s");
   assert.equal(typeof ra.stop, "function");
   ra.stop();
   ra.stop(); // idempotent
-  let resolved = null, rejected = null;
-  ra.promise.then(r => { resolved = r; }, e => { rejected = e; });
+  let resolved = null,
+    rejected = null;
+  ra.promise.then(
+    (r) => {
+      resolved = r;
+    },
+    (e) => {
+      rejected = e;
+    },
+  );
   const settled = await waitFor(() => resolved !== null || rejected !== null);
   assert.ok(settled, "promise settles after stop()");
   if (resolved) {
-    assert.equal(resolved.silenceEnd, undefined, "manual stop has no silenceEnd");
+    assert.equal(
+      resolved.silenceEnd,
+      undefined,
+      "manual stop has no silenceEnd",
+    );
     const buf = await readFile(resolved.filePath);
     assert.ok(buf.length >= 44, "WAV written");
     assert.equal(buf.toString("ascii", 0, 4), "RIFF");
     await unlink(resolved.filePath).catch(() => {});
   } else {
     // Error path (e.g. ffmpeg missing): no orphan temp WAV written
-    const orphans = (await readdir(tmpdir())).filter(n => n.startsWith("voice-") && !tmpBefore.has(n));
+    const orphans = (await readdir(tmpdir())).filter(
+      (n) => n.startsWith("voice-") && !tmpBefore.has(n),
+    );
     assert.deepEqual(orphans, [], "no orphan temp WAV after rejection");
   }
   ok("recordAudio stop() settles promise, no orphan file");
@@ -62,12 +84,59 @@ ok("parseMaxDuration defaults 20s, caps 60s");
 // --- recordAudio: settles without stop (device error / close→settle path) ---
 {
   const ra = recordAudio(2, "no-such-mic-device", 1);
-  let resolved = null, rejected = null;
-  ra.promise.then(r => { resolved = r; }, e => { rejected = e; });
-  const settled = await waitFor(() => resolved !== null || rejected !== null, 20000);
+  let resolved = null,
+    rejected = null;
+  ra.promise.then(
+    (r) => {
+      resolved = r;
+    },
+    (e) => {
+      rejected = e;
+    },
+  );
+  const settled = await waitFor(
+    () => resolved !== null || rejected !== null,
+    20000,
+  );
   assert.ok(settled, "promise settles without stop()");
   if (resolved) await unlink(resolved.filePath).catch(() => {});
   ok("recordAudio settles on its own");
+}
+
+// --- Silence detection path: fake ffmpeg streams 4s loud then silence ---
+{
+  const fakeBin = join(tmpdir(), `fake-ffmpeg-bin-${Date.now()}`);
+  await mkdir(fakeBin);
+  // Streams 500ms chunks in real time: loud (amplitude 10000) for 4s, then silence.
+  // With silenceDuration=1, detection fires after 1s of silence → ~t=5s,
+  // and the silence-end timestamp should be ≈ 4.0 (when speech actually ended).
+  const script = `#!/usr/bin/env bash
+exec node -e "
+const R=16000;
+const chunk=(sec,loud)=>{const b=Buffer.alloc(R*sec*2);if(loud)for(let i=0;i<R*sec;i++)b.writeInt16LE(10000,i*2);return b;};
+let t=0;
+const iv=setInterval(()=>{process.stdout.write(chunk(0.5,t<4));t+=0.5;if(t>=6)clearInterval(iv);},500);
+setTimeout(()=>process.exit(0),6800);
+"
+`;
+  await writeFile(join(fakeBin, "ffmpeg"), script, { mode: 0o755 });
+  const oldPath = process.env.PATH;
+  process.env.PATH = `${fakeBin}:${oldPath}`;
+  try {
+    const ra = recordAudio(10, "any-device", 1);
+    let resolved = null;
+    ra.promise.then(r => { resolved = r; });
+    const settled = await waitFor(() => resolved !== null, 15000);
+    assert.ok(settled, "silence path settles the promise");
+    assert.ok(
+      resolved.silenceEnd !== undefined && resolved.silenceEnd > 3.7 && resolved.silenceEnd < 4.3,
+      `silenceEnd ≈ 4.0s (speech end), got ${resolved.silenceEnd}`
+    );
+    await unlink(resolved.filePath).catch(() => {});
+  } finally {
+    process.env.PATH = oldPath;
+  }
+  ok("silence detection stops recording and reports speech end (silenceEnd)");
 }
 
 // --- Mock ExtensionAPI for state-machine tests ---
@@ -76,9 +145,15 @@ function makePi() {
     handlers: {},
     shortcuts: {},
     sent: [],
-    on(ev, h) { (pi.handlers[ev] ??= []).push(h); },
-    registerShortcut(key, def) { pi.shortcuts[key] = def; },
-    sendUserMessage(msg, opts) { pi.sent.push({ msg, opts }); },
+    on(ev, h) {
+      (pi.handlers[ev] ??= []).push(h);
+    },
+    registerShortcut(key, def) {
+      pi.shortcuts[key] = def;
+    },
+    sendUserMessage(msg, opts) {
+      pi.sent.push({ msg, opts });
+    },
   };
   voiceExt(pi);
   return pi;
@@ -90,7 +165,9 @@ function makeCtx() {
   const ctx = {
     ui: {
       notify: (msg, sev) => notifications.push({ msg, sev }),
-      setStatus: (key, val) => { statuses[key] = val; },
+      setStatus: (key, val) => {
+        statuses[key] = val;
+      },
     },
   };
   return { notifications, statuses, ctx };
@@ -108,25 +185,44 @@ function makeCtx() {
   // Press 1: start
   await press(ctx);
   assert.equal(statuses.voice, "recording", "first press starts recording");
-  assert.ok(notifications.some(n => n.msg.includes("Listening")), "listening notification");
+  assert.ok(
+    notifications.some((n) => n.msg.includes("Listening")),
+    "listening notification",
+  );
 
   // Press 2 + 3 immediately: stop path, idempotent (no double-start, no crash)
   await press(ctx);
   await press(ctx);
-  const stops = notifications.filter(n => n.msg.includes("stopping")).length;
+  const stops = notifications.filter((n) => n.msg.includes("stopping")).length;
   assert.ok(stops >= 1, "second press stops recording");
-  assert.equal(statuses.voice, "recording", "still recording while flow finishes");
+  assert.equal(
+    statuses.voice,
+    "recording",
+    "still recording while flow finishes",
+  );
 
   // Flow must finish: status back to ready + exactly one terminal notification
   const done = await waitFor(() => statuses.voice === "ready");
   assert.ok(done, "flow returns to ready");
-  const terminals = notifications.filter(n =>
-    n.msg.includes("too short") || n.msg.startsWith("Voice error") || n.msg.includes("no speech"));
-  assert.equal(terminals.length, 1, `exactly one terminal notification (got: ${notifications.map(n => n.msg).join(" | ")}`);
+  const terminals = notifications.filter(
+    (n) =>
+      n.msg.includes("too short") ||
+      n.msg.startsWith("Voice error") ||
+      n.msg.includes("no speech"),
+  );
+  assert.equal(
+    terminals.length,
+    1,
+    `exactly one terminal notification (got: ${notifications.map((n) => n.msg).join(" | ")}`,
+  );
 
   // Press after ready: starts a new recording
   await press(ctx);
-  assert.equal(statuses.voice, "recording", "press after ready starts new recording");
+  assert.equal(
+    statuses.voice,
+    "recording",
+    "press after ready starts new recording",
+  );
   await press(ctx); // stop it again
   const done2 = await waitFor(() => statuses.voice === "ready");
   assert.ok(done2, "second flow returns to ready");
@@ -147,11 +243,17 @@ function makeCtx() {
   // While recording: second /voice is rejected as busy
   const r = await pi.handlers.input[0]({ text: "/voice" }, ctx);
   assert.equal(r.action, "handled");
-  assert.ok(notifications.some(n => n.msg.includes("busy")), "busy guard rejects concurrent /voice");
+  assert.ok(
+    notifications.some((n) => n.msg.includes("busy")),
+    "busy guard rejects concurrent /voice",
+  );
 
   // Alt+Q stops the /voice recording
   await press(ctx);
-  assert.ok(notifications.some(n => n.msg.includes("stopping")), "Alt+Q stops /voice recording");
+  assert.ok(
+    notifications.some((n) => n.msg.includes("stopping")),
+    "Alt+Q stops /voice recording",
+  );
 
   const done = await waitFor(() => statuses.voice === "ready");
   assert.ok(done, "/voice flow returns to ready");
