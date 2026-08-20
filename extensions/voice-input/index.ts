@@ -1,8 +1,10 @@
 /**
  * Voice Input Extension
  *
- * Records audio until 2 seconds of silence is detected, then transcribes using faster-whisper.
- * Usage: type "/voice" and speak — stops recording after 2s of silence (max 60s).
+ * Records audio until 2 seconds of silence is detected (or Alt+Q is pressed
+ * again), then transcribes using faster-whisper.
+ * Usage: type "/voice" and speak — stops after 2s silence (default max 20s).
+ * Alt+Q toggles: first press starts recording, second press stops it early.
  * The transcribed text replaces the command and becomes your prompt — no paste needed.
  *
  * Config: set WHISPER_URL and MIC_DEVICE in .env file next to this extension.
@@ -38,7 +40,9 @@ function detectDefaultMic(): string | null {
       const match = line.match(/"([^"]+)"/);
       if (match) return match[1];
     }
-  } catch {}
+  } catch {
+    return null; // ffmpeg missing or dshow unavailable — caller uses fallback mic
+  }
   return null;
 }
 
@@ -118,9 +122,16 @@ async function pcmToWav(pcmBuffer: Buffer, outputPath: string): Promise<void> {
   await writeFile(outputPath, Buffer.concat([header, pcmBuffer]));
 }
 
-/** Record mic → raw PCM to stdout, analyze amplitude real-time, write WAV on stop. */
-function recordAudio(durationSeconds: number, micDevice: string, silenceDuration: number): Promise<{ filePath: string; silenceEnd?: number }> {
-  return new Promise((resolve, reject) => {
+/** Record mic → raw PCM to stdout, analyze amplitude real-time, write WAV on stop.
+ *  Returns the result promise plus a stop() handle for early (manual) stop.
+ *  stop() is idempotent and safe to call after the promise has settled. */
+export function recordAudio(durationSeconds: number, micDevice: string, silenceDuration: number): {
+  promise: Promise<{ filePath: string; silenceEnd?: number }>;
+  stop: () => void;
+} {
+  let doSettle: ((silenceEnd?: number) => void) | null = null;
+
+  const promise = new Promise<{ filePath: string; silenceEnd?: number }>((resolve, reject) => {
     const tempFile = join(tmpdir(), `voice-${Date.now()}.wav`);
 
     // DirectShow with detected mic device
@@ -137,6 +148,7 @@ function recordAudio(durationSeconds: number, micDevice: string, silenceDuration
     ]);
 
     let settled = false;
+    let rejected = false;
     let maxTimer: ReturnType<typeof setTimeout> | undefined;
     const pcmChunks: Buffer[] = [];
     // Track silence in ~500ms windows (16000 * 0.5 * 2 = 16000 bytes per window)
@@ -147,10 +159,12 @@ function recordAudio(durationSeconds: number, micDevice: string, silenceDuration
     const SILENCE_THRESHOLD = 800; // avg amplitude below this = silent
 
     const settle = async (silenceEnd?: number) => {
-      if (settled) return;
+      if (settled || rejected) return;
       settled = true;
       if (maxTimer) clearTimeout(maxTimer);
-      try { proc.kill(); } catch {}
+      if (proc.exitCode === null) {
+        try { proc.kill(); } catch (err) { console.error("[voice-input] failed to stop ffmpeg:", err); }
+      }
 
       // Assemble WAV from collected PCM
       try {
@@ -158,9 +172,13 @@ function recordAudio(durationSeconds: number, micDevice: string, silenceDuration
         await pcmToWav(pcmData, tempFile);
         resolve({ filePath: tempFile, silenceEnd });
       } catch (e) {
+        rejected = true;
         reject(e);
       }
     };
+
+    // Expose settle to the stop() handle (executor runs synchronously).
+    doSettle = (silenceEnd) => { void settle(silenceEnd); };
 
     proc.stdout.on("data", (chunk: Buffer) => {
       pcmChunks.push(chunk);
@@ -197,18 +215,31 @@ function recordAudio(durationSeconds: number, micDevice: string, silenceDuration
     });
 
     proc.on("close", () => {
-      if (!settled) settle();
+      if (!settled && !rejected) settle();
     });
 
     maxTimer = setTimeout(() => settle(), (durationSeconds + 3) * 1000);
-    proc.on("error", reject);
+    proc.on("error", (e) => {
+      // If a stop/silence settle is already in flight, let it finish — the
+      // flow will get the (partial) WAV and clean up; rejecting here would
+      // orphan the file settle is writing.
+      if (settled) return;
+      if (maxTimer) clearTimeout(maxTimer);
+      rejected = true;
+      reject(e);
+    });
   });
+
+  return {
+    promise,
+    stop: () => { doSettle?.(); },
+  };
 }
 
 /** Trim audio to the silence end point */
 async function trimAudio(inputPath: string, outputPath: string, duration: number): Promise<void> {
   return new Promise((resolve, reject) => {
-    const proc = execFile(
+    execFile(
       "ffmpeg",
       [
         "-y",
@@ -250,7 +281,7 @@ async function transcribe(whisperUrl: string, filePath: string): Promise<string>
 }
 
 /** Parse optional max duration from "/voice" or "/voice 30" */
-function parseMaxDuration(text: string): number {
+export function parseMaxDuration(text: string): number {
   const parts = text.split(/\s+/);
   if (parts.length >= 2) {
     const n = parseInt(parts[1], 10);
@@ -260,7 +291,7 @@ function parseMaxDuration(text: string): number {
 }
 
 /** Convert spoken "slash <command>" to "/<command>" so voice can trigger slash commands */
-function voiceTextToInput(text: string): string {
+export function voiceTextToInput(text: string): string {
   const t = text.trim();
   if (!/^slash\s+/i.test(t)) return t;
   let out = "/" + t.replace(/^slash\s+/i, "");
@@ -275,6 +306,9 @@ const MIC_SOURCE_LABELS = {
   fallback: "fallback default",
 } as const;
 
+/** Recordings shorter than this are treated as accidental presses (skip transcription). */
+const MIN_RECORD_MS = 1000;
+
 export default function (pi: ExtensionAPI) {
   let config: { whisperUrl: string; micDevice: string; micSource: "env" | "auto" | "fallback"; silenceDuration: number } = {
     whisperUrl: "",
@@ -283,42 +317,75 @@ export default function (pi: ExtensionAPI) {
     silenceDuration: 2,
   };
 
+  // Toggle state: activeStop is set while recording (an Alt+Q press stops early);
+  // busy covers the whole record→transcribe flow (prevents double starts).
+  let activeStop: (() => void) | null = null;
+  let busy = false;
+  let recordingSince = 0;
+
   pi.on("session_start", async (_event, ctx) => {
     config = getConfig();
     ctx.ui.setStatus("voice", "ready");
-    ctx.ui.notify(`Voice input: ready (/voice or Alt+Q — stops after ${config.silenceDuration}s silence, mic: ${config.micDevice})`, "info");
+    ctx.ui.notify(`Voice input: ready (/voice or Alt+Q — stops after ${config.silenceDuration}s silence or Alt+Q, mic: ${config.micDevice})`, "info");
   });
 
-  // Keyboard shortcut to trigger voice input
+  // Keyboard shortcut: toggle voice input (first press starts, second press stops)
   pi.registerShortcut("alt+q", {
-    description: "Start voice input (record until silence)",
+    description: "Toggle voice input — starts recording; press again to stop",
     handler: async (ctx) => {
-      ctx.ui.notify(`🎙 Listening... (speak now, stops after ${config.silenceDuration}s silence)`, "info");
-      ctx.ui.setStatus("voice", "recording");
-
-      try {
-        const maxDuration = 20;
-        const { filePath: tempFile } = await recordAudio(maxDuration, config.micDevice, config.silenceDuration);
-        let filesToDelete = [tempFile];
-
-        ctx.ui.setStatus("voice", "transcribing");
-        const text = await transcribe(config.whisperUrl, tempFile);
-        for (const f of filesToDelete) await unlink(f).catch(() => {});
-
-        if (text.trim()) {
-          // expandPromptTemplates dispatches slash commands spoken as "slash <cmd>"
-          pi.sendUserMessage(voiceTextToInput(text), { expandPromptTemplates: true });
-        } else {
-          ctx.ui.notify("Voice: no speech detected", "warning");
-        }
-      } catch (err) {
-        const msg = typeof err === "object" && err !== null && "message" in err
-          ? (err as { message: string }).message
-          : String(err);
-        ctx.ui.notify(`Voice error: ${msg}`, "error");
-      } finally {
-        ctx.ui.setStatus("voice", "ready");
+      if (activeStop) {
+        // Second press: stop recording early (idempotent if silence already won the race)
+        activeStop();
+        ctx.ui.notify("⏹ Voice: stopping recording...", "info");
+        return;
       }
+      if (busy) {
+        ctx.ui.notify("Voice: busy — current recording/transcription still running", "warning");
+        return;
+      }
+      busy = true;
+      // Detached flow: the handler returns immediately so a second Alt+Q press can stop it.
+      void (async () => {
+        try {
+          recordingSince = Date.now();
+          ctx.ui.notify(`🎙 Listening... (press Alt+Q to stop, or ${config.silenceDuration}s silence)`, "info");
+          ctx.ui.setStatus("voice", "recording");
+
+          const maxDuration = 20;
+          const { promise, stop } = recordAudio(maxDuration, config.micDevice, config.silenceDuration);
+          activeStop = stop;
+          const { filePath: tempFile } = await promise;
+          activeStop = null;
+
+          const elapsed = Date.now() - recordingSince;
+          if (elapsed < MIN_RECORD_MS) {
+            await unlink(tempFile).catch(() => {});
+            ctx.ui.notify("Voice: too short — nothing recorded", "warning");
+            return;
+          }
+
+          let filesToDelete = [tempFile];
+          ctx.ui.setStatus("voice", "transcribing");
+          const text = await transcribe(config.whisperUrl, tempFile);
+          for (const f of filesToDelete) await unlink(f).catch(() => {});
+
+          if (text.trim()) {
+            // expandPromptTemplates dispatches slash commands spoken as "slash <cmd>"
+            pi.sendUserMessage(voiceTextToInput(text), { expandPromptTemplates: true });
+          } else {
+            ctx.ui.notify("Voice: no speech detected", "warning");
+          }
+        } catch (err) {
+          const msg = typeof err === "object" && err !== null && "message" in err
+            ? (err as { message: string }).message
+            : String(err);
+          ctx.ui.notify(`Voice error: ${msg}`, "error");
+        } finally {
+          activeStop = null;
+          busy = false;
+          ctx.ui.setStatus("voice", "ready");
+        }
+      })();
     },
   });
 
@@ -332,17 +399,34 @@ export default function (pi: ExtensionAPI) {
       return { action: "handled" };
     }
 
+    if (busy) {
+      ctx.ui.notify("Voice: busy — current recording/transcription still running", "warning");
+      return { action: "handled" };
+    }
+    busy = true;
+
     const maxDuration = parseMaxDuration(event.text);
-    ctx.ui.notify(`🎙 Listening... (speak now, stops after ${config.silenceDuration}s silence)`, "info");
+    ctx.ui.notify(`🎙 Listening... (press Alt+Q to stop, or ${config.silenceDuration}s silence)`, "info");
     ctx.ui.setStatus("voice", "recording");
+    recordingSince = Date.now();
 
     const filesToDelete: string[] = [];
     try {
-      // Record with real-time silence detection
-      const { filePath: tempFile, silenceEnd } = await recordAudio(maxDuration, config.micDevice, config.silenceDuration);
+      // Record with real-time silence detection; Alt+Q can stop it early
+      const { promise, stop } = recordAudio(maxDuration, config.micDevice, config.silenceDuration);
+      activeStop = stop;
+      const { filePath: tempFile, silenceEnd } = await promise;
+      activeStop = null;
       filesToDelete.push(tempFile);
 
-      // Trim to silence end if detected
+      const elapsed = Date.now() - recordingSince;
+      if (elapsed < MIN_RECORD_MS) {
+        for (const f of filesToDelete) await unlink(f).catch(() => {});
+        ctx.ui.notify("Voice: too short — nothing recorded", "warning");
+        return { action: "handled" };
+      }
+
+      // Trim to silence end if detected (manual stop has no silenceEnd)
       let audioFile = tempFile;
       if (silenceEnd !== undefined) {
         const trimmedFile = join(tmpdir(), `voice-trimmed-${Date.now()}.wav`);
@@ -378,6 +462,8 @@ export default function (pi: ExtensionAPI) {
       ctx.ui.notify(`Voice error: ${msg}`, "error");
       return { action: "handled" };
     } finally {
+      activeStop = null;
+      busy = false;
       ctx.ui.setStatus("voice", "ready");
     }
   });

@@ -79,7 +79,7 @@ Commands:
 - `/voice` — record until ~2s silence (default max 20s)
 - `/voice 30` — allow up to 30s of speech
 - `/voice mic` — show the active microphone and where it came from (env/.env, auto-detected, or fallback)
-- `Alt+Q` — same as `/voice`
+- `Alt+Q` — toggle: press once to start recording, press again to stop early (works for `/voice`-started recordings too)
 
 Voice slash commands: say **"slash" + command** (e.g. "slash look what's wrong with this") to trigger any slash command by voice — rewritten to `/look ...` and dispatched automatically.
 
