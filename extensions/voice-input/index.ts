@@ -65,19 +65,22 @@ function loadEnvFile(envPath: string): Record<string, string> {
   }
 }
 
-function getConfig(): { whisperUrl: string; micDevice: string; silenceDuration: number } {
+function getConfig(): { whisperUrl: string; micDevice: string; micSource: "env" | "auto" | "fallback"; silenceDuration: number } {
   const envFile = join(__dirname, ".env");
   const envVars = loadEnvFile(envFile);
 
   const whisperUrl = process.env.WHISPER_URL || envVars.WHISPER_URL || "https://whisper.local.johnyan.net";
   let micDevice = process.env.MIC_DEVICE || envVars.MIC_DEVICE || "";
+  let micSource: "env" | "auto" | "fallback" = "env";
   // Auto-detect first real hardware mic if not configured
   if (!micDevice) {
-    micDevice = detectDefaultMic() || "Microphone (HyperX SoloCast)";
+    const detected = detectDefaultMic();
+    micDevice = detected || "Microphone (HyperX SoloCast)";
+    micSource = detected ? "auto" : "fallback";
   }
   const silenceDuration = parseInt(process.env.SILENCE_DURATION || envVars.SILENCE_DURATION || "2", 10);
 
-  return { whisperUrl, micDevice, silenceDuration: isNaN(silenceDuration) ? 2 : Math.max(1, silenceDuration) };
+  return { whisperUrl, micDevice, micSource, silenceDuration: isNaN(silenceDuration) ? 2 : Math.max(1, silenceDuration) };
 }
 
 /** Write raw PCM buffer as WAV file. */
@@ -266,10 +269,17 @@ function voiceTextToInput(text: string): string {
   return out;
 }
 
+const MIC_SOURCE_LABELS = {
+  env: "MIC_DEVICE (env/.env)",
+  auto: "auto-detected (FFmpeg DirectShow)",
+  fallback: "fallback default",
+} as const;
+
 export default function (pi: ExtensionAPI) {
-  let config: { whisperUrl: string; micDevice: string; silenceDuration: number } = {
+  let config: { whisperUrl: string; micDevice: string; micSource: "env" | "auto" | "fallback"; silenceDuration: number } = {
     whisperUrl: "",
     micDevice: "",
+    micSource: "fallback",
     silenceDuration: 2,
   };
 
@@ -315,6 +325,12 @@ export default function (pi: ExtensionAPI) {
   // Intercept /voice command and transform into transcribed text
   pi.on("input", async (event, ctx) => {
     if (!event.text.startsWith("/voice")) return;
+
+    // /voice mic — show the active microphone and where it came from
+    if (/^\/voice\s+mic\s*$/i.test(event.text)) {
+      ctx.ui.notify(`Voice mic: ${config.micDevice} — ${MIC_SOURCE_LABELS[config.micSource]}`, "info");
+      return { action: "handled" };
+    }
 
     const maxDuration = parseMaxDuration(event.text);
     ctx.ui.notify(`🎙 Listening... (speak now, stops after ${config.silenceDuration}s silence)`, "info");
