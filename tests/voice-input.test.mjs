@@ -284,7 +284,7 @@ setTimeout(()=>process.exit(0),6800)
 "
 fi
 for last; do :; done
-printf 'RIFF' > "$last"
+case "$last" in /*) printf 'RIFF' > "$last";; esac
 `;
   await writeFile(join(fakeBin, "ffmpeg"), script, { mode: 0o755 });
 
