@@ -5,7 +5,7 @@ Custom extensions for [Pi Coding Agent](https://github.com/earendil-works/pi-cod
 ## Extensions
 
 | Extension | Description |
-|-----------|-------------|
+| ----------- | ------------- |
 | [highlight-footer](./extensions/highlight-footer.ts) | Custom footer with git status, model name, and gradient context usage bar |
 | [compaction-model](./extensions/compaction-model.ts) | Uses a separate smaller model for session compaction and branch summarization |
 | [working-indicator](./extensions/working-indicator.ts) | Context-aware working indicator that changes based on what Pi is doing |
@@ -38,12 +38,14 @@ pi --extension /path/to/PiCodingAgentExtensions/extensions/highlight-footer.ts
 ### highlight-footer
 
 No configuration needed. Displays:
+
 - Line 1: project name / git branch with staged/unstaged file counts
 - Line 2: model name with gradient context usage bar (green → yellow → red)
 
 ### compaction-model
 
 Environment variables:
+
 ```bash
 COMPACTION_MODEL_PROVIDER=litellm
 COMPACTION_MODEL_ID=Qwen3.5-8B
@@ -55,6 +57,7 @@ COMPACTION_MODEL_MAX_TOKENS=8192
 ### working-indicator
 
 Commands:
+
 - `/working-indicator` — show current mode
 - `/working-indicator dot` — static dot
 - `/working-indicator pulse` — animated pulse
@@ -66,6 +69,7 @@ Commands:
 ### response-latency
 
 No configuration needed. Shows latency in status bar with phases:
+
 - `< 2s` — ⚡ fast (green)
 - `2-5s` — ◉ normal (yellow)
 - `5-10s` — ◈ slow (orange)
@@ -76,6 +80,7 @@ No configuration needed. Shows latency in status bar with phases:
 Voice-to-text: records your microphone until silence, transcribes via a faster-whisper server, and sends the text as your prompt.
 
 Commands:
+
 - `/voice` — record until ~2s silence (default max 20s)
 - `/voice 30` — allow up to 30s of speech
 - `/voice mic` — show the active microphone and where it came from (env/.env, auto-detected, or fallback)
@@ -86,6 +91,7 @@ Voice slash commands: say **"slash" + command** (e.g. "slash look what's wrong w
 Footer state (via highlight-footer): 🎙 ready → 🔴 recording → ⏳ transcribing → 🎙 ready.
 
 Config via `.env` next to the extension (see [extensions/voice-input/README.md](./extensions/voice-input/README.md)):
+
 ```bash
 WHISPER_URL=https://{server}   # OpenAI-compatible /v1/audio/transcriptions
 MIC_DEVICE=Microphone (Your Mic)                # optional — auto-detects first hardware mic if omitted
@@ -111,6 +117,7 @@ Controls whether `web_search` opens the interactive browser curator. `/search-br
 Appends user prompts and assistant responses (no thinking blocks, no tool output) to `{vault}/Projects/{project}/{sessionId}/MM-DD-YYYY.md`. Toggle with `/obsidian-logger on|off`.
 
 Config via `.env` next to the extension or environment variables:
+
 ```bash
 OBSIDIAN_VAULT_PATH=/path/to/vault
 OBSIDIAN_LOGGER_ENABLED=true   # optional, default true
@@ -121,12 +128,14 @@ OBSIDIAN_LOGGER_ENABLED=true   # optional, default true
 Intercepts `bash` tool calls and asks for confirmation before destructive commands. Without a UI (non-interactive mode) matching commands are blocked outright. On by default every session — state is in-memory, never persisted.
 
 Commands:
+
 - `/danger-guard` — show state + active patterns
 - `/danger-guard on|off|toggle`
 
 Default patterns: `rm -r/-f`, `sudo`, `chmod 777`, Windows `del/rd /s`, `format <drive>:`/`diskpart`, PowerShell `Remove-Item -Recurse`/`Clear-Disk`/`Format-Volume`, `git push --force|-f|--force-with-lease`, `git reset --hard`, `git clean -d…`, `git checkout --`, `git branch -D`, SQL `DROP`/`TRUNCATE`, `mkfs`/`dd of=/dev/…`/`shred`.
 
 Environment variables:
+
 ```bash
 DANGER_GUARD_PATTERNS='["\\bgit\\s+push\\b"]'  # JSON array of regex strings, replaces defaults
 DANGER_GUARD_TIMEOUT_MS=120000                  # confirm timeout (default 120s; timeout = block)
@@ -137,10 +146,12 @@ DANGER_GUARD_TIMEOUT_MS=120000                  # confirm timeout (default 120s;
 Sends a screenshot or image directly to the model as an attached image. Requires a vision-capable model (`"input": ["text", "image"]` in `models.json`).
 
 Workflow:
+
 1. Take a screenshot: `Win+Shift+S`
 2. Type the command below and submit — the Windows clipboard is read directly (no `Alt+V` needed)
 
 Commands:
+
 - `/look` — analyze the current clipboard screenshot (default: describe + analyze)
 - `/look what's wrong with this error?` — custom question about the screenshot
 - `/look C:\path\to\img.png describe this` — explicit image file + prompt
@@ -163,6 +174,7 @@ npm run typecheck
 Global agent instructions for Pi Coding Agent. See [agents/AGENTS.md](./agents/AGENTS.md).
 
 Install:
+
 ```bash
 cp agents/AGENTS.md ~/.pi/agent/AGENTS.md
 ```
@@ -174,7 +186,7 @@ Reusable procedures and patterns for Pi Coding Agent.
 ### Built-in Skills (Pi Core)
 
 | Skill | Description |
-|-------|-------------|
+| ------- | ------------- |
 | [build](./skills/build/SKILL.md) | Implement one task or scoped change |
 | [coverage](./skills/coverage/SKILL.md) | Evaluate test coverage and fill gaps |
 | [plan](./skills/plan/SKILL.md) | Break work into agent-ready tasks |
@@ -183,6 +195,7 @@ Reusable procedures and patterns for Pi Coding Agent.
 | [startup](./skills/startup/SKILL.md) | Read and understand a project |
 
 Install:
+
 ```bash
 # Install all
 cp -r skills/* ~/.pi/agent/skills/

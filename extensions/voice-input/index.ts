@@ -264,7 +264,10 @@ export function recordAudio(
             if (silentWindows >= SILENT_WINDOWS_NEEDED) {
               // Speech ended ~silenceDuration before detection (ffmpeg streams
               // real-time, so received bytes ≈ elapsed seconds * 32000)
-              const end = Math.max(0, totalBytes / (SAMPLE_RATE * 2) - silenceDuration);
+              const end = Math.max(
+                0,
+                totalBytes / (SAMPLE_RATE * 2) - silenceDuration,
+              );
               settle(end);
               return;
             }
@@ -455,7 +458,7 @@ export default function (pi: ExtensionAPI) {
             config.silenceDuration,
           );
           activeStop = stop;
-          const { filePath: tempFile } = await promise;
+          const { filePath: tempFile, silenceEnd } = await promise;
           activeStop = null;
 
           const elapsed = Date.now() - recordingSince;
@@ -466,8 +469,18 @@ export default function (pi: ExtensionAPI) {
           }
 
           const filesToDelete = [tempFile];
+
+          // Trim to silence end if detected (manual stop has no silenceEnd)
+          let audioFile = tempFile;
+          if (silenceEnd !== undefined) {
+            const trimmedFile = join(tmpdir(), `voice-trimmed-${Date.now()}.wav`);
+            await trimAudio(tempFile, trimmedFile, silenceEnd);
+            filesToDelete.push(trimmedFile);
+            audioFile = trimmedFile;
+          }
+
           ctx.ui.setStatus("voice", "transcribing");
-          const text = await transcribe(config.whisperUrl, tempFile);
+          const text = await transcribe(config.whisperUrl, audioFile);
           for (const f of filesToDelete) await unlink(f).catch(() => {});
 
           if (text.trim()) {

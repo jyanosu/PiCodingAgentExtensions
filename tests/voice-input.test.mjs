@@ -125,12 +125,16 @@ setTimeout(()=>process.exit(0),6800);
   try {
     const ra = recordAudio(10, "any-device", 1);
     let resolved = null;
-    ra.promise.then(r => { resolved = r; });
+    ra.promise.then((r) => {
+      resolved = r;
+    });
     const settled = await waitFor(() => resolved !== null, 15000);
     assert.ok(settled, "silence path settles the promise");
     assert.ok(
-      resolved.silenceEnd !== undefined && resolved.silenceEnd > 3.7 && resolved.silenceEnd < 4.3,
-      `silenceEnd ≈ 4.0s (speech end), got ${resolved.silenceEnd}`
+      resolved.silenceEnd !== undefined &&
+        resolved.silenceEnd > 3.7 &&
+        resolved.silenceEnd < 4.3,
+      `silenceEnd ≈ 4.0s (speech end), got ${resolved.silenceEnd}`,
     );
     await unlink(resolved.filePath).catch(() => {});
   } finally {
@@ -259,6 +263,66 @@ function makeCtx() {
   assert.ok(done, "/voice flow returns to ready");
   await inputPromise; // ensure no unhandled rejection
   ok("/voice: busy guard + Alt+Q cross-stop");
+}
+
+// --- Alt+Q flow trims on silence stop (regression: shortcut path used to skip trim) ---
+{
+  const fakeBin = join(tmpdir(), `fake-ffmpeg-trim-${Date.now()}`);
+  const logFile = join(tmpdir(), `fake-ffmpeg-log-${Date.now()}`);
+  await mkdir(fakeBin);
+  // Combined fake: record mode (first arg -nostdin) streams 4s loud + silence
+  // in real time; trim mode writes a stub file to the last arg. All argv logged.
+  const script = `#!/usr/bin/env bash
+[ -n "$FAKE_FFMPEG_LOG" ] && echo "$@" >> "$FAKE_FFMPEG_LOG"
+if [ "$1" = "-nostdin" ]; then
+  exec node -e "
+const R=16000;
+const chunk=(sec,loud)=>{const b=Buffer.alloc(R*sec*2);if(loud)for(let i=0;i<R*sec;i++)b.writeInt16LE(10000,i*2);return b;};
+let t=0;
+const iv=setInterval(()=>{process.stdout.write(chunk(0.5,t<4));t+=0.5;if(t>=6)clearInterval(iv);},500)
+setTimeout(()=>process.exit(0),6800)
+"
+fi
+for last; do :; done
+printf 'RIFF' > "$last"
+`;
+  await writeFile(join(fakeBin, "ffmpeg"), script, { mode: 0o755 });
+
+  const oldPath = process.env.PATH;
+  const oldWhisper = process.env.WHISPER_URL;
+  const oldLog = process.env.FAKE_FFMPEG_LOG;
+  process.env.PATH = `${fakeBin}:${oldPath}`;
+  process.env.WHISPER_URL = "http://127.0.0.1:9"; // force fast transcribe failure
+  process.env.FAKE_FFMPEG_LOG = logFile;
+  try {
+    const pi = makePi();
+    const { statuses, ctx } = makeCtx();
+    await pi.handlers.session_start[0]({}, ctx);
+
+    await pi.shortcuts["alt+q"].handler(ctx); // start via shortcut
+    assert.equal(statuses.voice, "recording", "Alt+Q starts recording");
+
+    // Silence stop at ~t=5s → trim with -t ≈ 4.0 → transcribe fails fast → ready
+    const done = await waitFor(() => statuses.voice === "ready", 20000);
+    assert.ok(done, "Alt+Q flow returns to ready");
+
+    const log = await readFile(logFile, "utf8").catch(() => "");
+    const trimLine = log.split("\n").find((l) => l.split(/\s+/).includes("-t"));
+    assert.ok(trimLine, `Alt+Q flow called trim on silence stop (log: ${log})`);
+    const args = trimLine.split(/\s+/);
+    const dur = parseFloat(args[args.indexOf("-t") + 1]);
+    assert.ok(
+      dur > 3.7 && dur < 4.3,
+      `trim duration ≈ 4.0s (speech end), got ${dur}`
+    );
+  } finally {
+    process.env.PATH = oldPath;
+    if (oldWhisper === undefined) delete process.env.WHISPER_URL;
+    else process.env.WHISPER_URL = oldWhisper;
+    if (oldLog === undefined) delete process.env.FAKE_FFMPEG_LOG;
+    else process.env.FAKE_FFMPEG_LOG = oldLog;
+  }
+  ok("Alt+Q flow trims trailing silence (silenceEnd reaches the shortcut path)");
 }
 
 console.log(`\n${passed} test groups passed`);
