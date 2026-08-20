@@ -154,8 +154,12 @@ export default function (pi: ExtensionAPI) {
       tuiHandle = tui;
       const render = (width: number): string[] => {
         // Left: voice indicator + project / branch [staged] [unstaged]
-        const voiceStatus = (footerData as any)?.status?.voice;
-        const voiceIcon = voiceStatus === "ready" ? "\x1b[32m🎙\x1b[0m" : "";
+        // Status set by voice-input extension: ready | recording | transcribing
+        const voiceStatus = footerData.getExtensionStatuses().get("voice");
+        let voiceIcon = "";
+        if (voiceStatus === "recording") voiceIcon = "\x1b[31m🔴\x1b[0m";
+        else if (voiceStatus === "transcribing") voiceIcon = "\x1b[33m⏳\x1b[0m";
+        else if (voiceStatus === "ready") voiceIcon = "\x1b[32m🎙\x1b[0m";
         const voiceSpacer = voiceIcon ? " " : "";
         let left = voiceIcon + voiceSpacer + (branch
           ? theme.fg("accent", theme.bold(project)) + theme.fg("muted", " / ") + theme.fg("accent", theme.bold(branch))
