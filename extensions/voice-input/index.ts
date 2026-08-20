@@ -284,12 +284,14 @@ export default function (pi: ExtensionAPI) {
     description: "Start voice input (record until silence)",
     handler: async (ctx) => {
       ctx.ui.notify(`🎙 Listening... (speak now, stops after ${config.silenceDuration}s silence)`, "info");
+      ctx.ui.setStatus("voice", "recording");
 
       try {
         const maxDuration = 20;
         const { filePath: tempFile } = await recordAudio(maxDuration, config.micDevice, config.silenceDuration);
         let filesToDelete = [tempFile];
 
+        ctx.ui.setStatus("voice", "transcribing");
         const text = await transcribe(config.whisperUrl, tempFile);
         for (const f of filesToDelete) await unlink(f).catch(() => {});
 
@@ -304,6 +306,8 @@ export default function (pi: ExtensionAPI) {
           ? (err as { message: string }).message
           : String(err);
         ctx.ui.notify(`Voice error: ${msg}`, "error");
+      } finally {
+        ctx.ui.setStatus("voice", "ready");
       }
     },
   });
@@ -314,6 +318,7 @@ export default function (pi: ExtensionAPI) {
 
     const maxDuration = parseMaxDuration(event.text);
     ctx.ui.notify(`🎙 Listening... (speak now, stops after ${config.silenceDuration}s silence)`, "info");
+    ctx.ui.setStatus("voice", "recording");
 
     const filesToDelete: string[] = [];
     try {
@@ -331,6 +336,7 @@ export default function (pi: ExtensionAPI) {
       }
 
       // Transcribe
+      ctx.ui.setStatus("voice", "transcribing");
       const text = await transcribe(config.whisperUrl, audioFile);
       for (const f of filesToDelete) await unlink(f).catch(() => {});
 
@@ -355,6 +361,8 @@ export default function (pi: ExtensionAPI) {
         : String(err);
       ctx.ui.notify(`Voice error: ${msg}`, "error");
       return { action: "handled" };
+    } finally {
+      ctx.ui.setStatus("voice", "ready");
     }
   });
 }

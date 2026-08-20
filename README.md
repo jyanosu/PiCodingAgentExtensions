@@ -16,6 +16,7 @@ Custom extensions for [Pi Coding Agent](https://github.com/earendil-works/pi-cod
 | [auto-continue](./extensions/auto-continue.ts) | Auto-sends "continue" when the model leaks unexecuted tool-call XML as text (toggle: `/autocontinue`) |
 | [search-browser](./extensions/search-browser.ts) | Toggle browser curator for `web_search` calls (`/search-browser on\|off`), persisted per session |
 | [obsidian-logger](./extensions/obsidian-logger/) | Logs prompts + responses to an Obsidian vault as Markdown (`/obsidian-logger`) |
+| [danger-guard](./extensions/danger-guard.ts) | Confirms before destructive bash commands (`rm -rf`, `git push --force`, `DROP TABLE`, …); blocks without UI (`/danger-guard`) |
 
 ## Installation
 
@@ -81,6 +82,8 @@ Commands:
 
 Voice slash commands: say **"slash" + command** (e.g. "slash look what's wrong with this") to trigger any slash command by voice — rewritten to `/look ...` and dispatched automatically.
 
+Footer state (via highlight-footer): 🎙 ready → 🔴 recording → ⏳ transcribing → 🎙 ready.
+
 Config via `.env` next to the extension (see [extensions/voice-input/README.md](./extensions/voice-input/README.md)):
 ```bash
 WHISPER_URL=https://{server}   # OpenAI-compatible /v1/audio/transcriptions
@@ -110,6 +113,22 @@ Config via `.env` next to the extension or environment variables:
 ```bash
 OBSIDIAN_VAULT_PATH=/path/to/vault
 OBSIDIAN_LOGGER_ENABLED=true   # optional, default true
+```
+
+### danger-guard
+
+Intercepts `bash` tool calls and asks for confirmation before destructive commands. Without a UI (non-interactive mode) matching commands are blocked outright. On by default every session — state is in-memory, never persisted.
+
+Commands:
+- `/danger-guard` — show state + active patterns
+- `/danger-guard on|off|toggle`
+
+Default patterns: `rm -r/-f`, `sudo`, `chmod 777`, Windows `del/rd /s`, `format <drive>:`/`diskpart`, PowerShell `Remove-Item -Recurse`/`Clear-Disk`/`Format-Volume`, `git push --force|-f|--force-with-lease`, `git reset --hard`, `git clean -d…`, `git checkout --`, `git branch -D`, SQL `DROP`/`TRUNCATE`, `mkfs`/`dd of=/dev/…`/`shred`.
+
+Environment variables:
+```bash
+DANGER_GUARD_PATTERNS='["\\bgit\\s+push\\b"]'  # JSON array of regex strings, replaces defaults
+DANGER_GUARD_TIMEOUT_MS=120000                  # confirm timeout (default 120s; timeout = block)
 ```
 
 ### look
