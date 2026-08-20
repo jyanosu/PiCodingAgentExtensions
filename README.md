@@ -78,6 +78,7 @@ Voice-to-text: records your microphone until silence, transcribes via a faster-w
 Commands:
 - `/voice` — record until ~2s silence (default max 20s)
 - `/voice 30` — allow up to 30s of speech
+- `/voice mic` — show the active microphone and where it came from (env/.env, auto-detected, or fallback)
 - `Alt+Q` — same as `/voice`
 
 Voice slash commands: say **"slash" + command** (e.g. "slash look what's wrong with this") to trigger any slash command by voice — rewritten to `/look ...` and dispatched automatically.
