@@ -8,17 +8,21 @@
  * where {root} is the Obsidian vault by default, or the OS temp directory
  * (os.tmpdir()/pi-obsidian-logger) when switched via /obsidian-logger tmp.
  *
+ * Assistant reasoning (thinking blocks) is excluded by default; enable it
+ * per session with /obsidian-logger thinking.
+ *
  * Config: set OBSIDIAN_VAULT_PATH in .env file next to this extension,
  * or export OBSIDIAN_VAULT_PATH environment variable.
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { parseSkillBlock } from "@earendil-works/pi-coding-agent";
-import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, open, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
+import { execFile } from "node:child_process";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -133,17 +137,20 @@ function stripSkillExpansion(text: string): string {
   return skill.userMessage ? `/skill:${skill.name} ${skill.userMessage}` : `/skill:${skill.name}`;
 }
 
-/** Extract assistant text (excluding thinking blocks and tool calls) */
-function extractAssistantText(content: unknown): string {
+/** Extract assistant text (excluding tool calls; thinking only when included) */
+function extractAssistantText(content: unknown, includeThinking = false): string {
   if (!Array.isArray(content)) return "";
 
   const parts: string[] = [];
   for (const block of content) {
     if (!block || typeof block !== "object") continue;
     const b = block as ContentBlock;
-    // Only include text blocks, skip thinking and tool calls
-    if (b.type === "text" && typeof b.text === "string") {
+    if (typeof b.text !== "string") continue;
+    if (b.type === "text") {
       parts.push(b.text);
+    } else if (includeThinking && b.type === "thinking") {
+      // Foldable in Obsidian; keeps the visible response uncluttered
+      parts.push(`<details>\n<summary>🧠 Reasoning</summary>\n\n${b.text}\n\n</details>`);
     }
   }
   return parts.join("\n");
@@ -174,6 +181,43 @@ async function ensureProjectReadme(vaultPath: string, projectName: string): Prom
   }
 }
 
+/** Best-effort git branch of cwd (undefined when not a git repo) */
+function getGitBranch(cwd: string): Promise<string | undefined> {
+  return new Promise((resolve) => {
+    execFile("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd, timeout: 2000 }, (err, stdout) => {
+      resolve(err ? undefined : stdout.trim() || undefined);
+    });
+  });
+}
+
+/** Minimal YAML quoting for frontmatter values */
+function yq(v: string): string {
+  const Q = String.fromCharCode(34); // double quote
+  const B = String.fromCharCode(92); // backslash
+  if (!v.includes(Q) && !v.includes(":") && !v.includes("#")) return v;
+  return Q + v.split(Q).join(B + Q) + Q;
+}
+
+/** YAML frontmatter written once when a daily file is first created */
+async function buildFrontmatter(ctx: ExtensionContext, projectName: string, sessionId: string): Promise<string> {
+  const model = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "unknown";
+  const branch = await getGitBranch(ctx.cwd);
+  const lines = [
+    "---",
+    `project: ${yq(projectName)}`,
+    `session: ${yq(sessionId)}`,
+    `model: ${yq(model)}`,
+    `cwd: ${yq(ctx.cwd)}`,
+  ];
+  if (branch) lines.push(`branch: ${yq(branch)}`);
+  lines.push(`created: ${new Date().toISOString()}`);
+  lines.push("---");
+  return `${lines.join("\n")}\n\n`;
+}
+
+/** In-flight frontmatter creation per file path (serializes concurrent first writes) */
+const fileCreations = new Map<string, Promise<void>>();
+
 /** Append content to the daily MD file */
 async function appendToDailyFile(ctx: ExtensionContext, vaultPath: string, projectName: string, sessionId: string, role: string, text: string): Promise<void> {
   if (!text.trim()) return;
@@ -194,6 +238,28 @@ async function appendToDailyFile(ctx: ExtensionContext, vaultPath: string, proje
     // Create folders if missing (kept inside try: a bad vault path must
     // notify, not crash the agent via unhandled rejection)
     await mkdir(folderPath, { recursive: true });
+    // Write frontmatter exactly once per file. Creation is serialized per
+    // file path: the winner does exclusive open + frontmatter via handle,
+    // concurrent events await the same promise, then append — so the
+    // frontmatter is in the file before any entry can land.
+    let creation = fileCreations.get(filePath);
+    if (!creation) {
+      creation = (async () => {
+        try {
+          const fh = await open(filePath, "wx");
+          try {
+            await fh.writeFile(await buildFrontmatter(ctx, projectName, sessionId), "utf-8");
+          } finally {
+            await fh.close();
+          }
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+        }
+      })();
+      fileCreations.set(filePath, creation);
+      void creation.finally(() => fileCreations.delete(filePath));
+    }
+    await creation;
     // Append directly — avoids read-modify-write (O(n²) I/O in long
     // sessions) and lost entries when two message_end events overlap.
     await appendFile(filePath, entry, "utf-8");
@@ -212,17 +278,22 @@ export default function (pi: ExtensionAPI) {
   let enabled = true;
   let vaultPath: string | undefined;
   let logTarget: "vault" | "tmp" = "vault";
+  let logThinking = false;
   let projectName: string = "";
   let sessionId: string = "";
   let readmeChecked = false;
 
+  /** Full state string for notifications */
+  const state = () => `${enabled ? "ON" : "OFF"} (target: ${logTarget}, thinking: ${logThinking ? "on" : "off"})`;
+
   pi.on("session_start", async (_event, ctx) => {
     enabled = readEnabledFromConfig();
     logTarget = "vault";
+    logThinking = false;
 
     if (!enabled) {
       console.log("[obsidian-logger] Logger disabled (OBSIDIAN_LOGGER_ENABLED not set or false).");
-      if (ctx.hasUI) ctx.ui.notify(`Obsidian logger: OFF`, "warning");
+      if (ctx.hasUI) ctx.ui.notify(`Obsidian logger: ${state()}`, "warning");
       return;
     }
 
@@ -232,13 +303,13 @@ export default function (pi: ExtensionAPI) {
 
     if (!vaultPath) {
       console.log("[obsidian-logger] OBSIDIAN_VAULT_PATH not set. Set it in .env file next to the extension or as an environment variable, or use /obsidian-logger tmp to log to the temp directory.");
-      if (ctx.hasUI) ctx.ui.notify(`Obsidian logger: ON (no vault path set — use /obsidian-logger tmp)`, "info");
+      if (ctx.hasUI) ctx.ui.notify(`Obsidian logger: ${state()} (no vault path set — use /obsidian-logger tmp)`, "info");
       return;
     }
 
     const folderPath = join(vaultPath, "Projects", projectName, sessionId);
     console.log(`[obsidian-logger] Logging to: ${folderPath}`);
-    if (ctx.hasUI) ctx.ui.notify(`Obsidian logger: ON (target: vault)`, "info");
+    if (ctx.hasUI) ctx.ui.notify(`Obsidian logger: ${state()}`, "info");
   });
 
   // Capture user prompts and assistant responses
@@ -253,7 +324,7 @@ export default function (pi: ExtensionAPI) {
 
     const text = role === "user"
       ? stripSkillExpansion(extractUserText(event.message.content))
-      : extractAssistantText(event.message.content);
+      : extractAssistantText(event.message.content, logThinking);
 
     // Ensure README.md exists on first vault write of session (never in temp mode)
     if (logTarget === "vault" && !readmeChecked) {
@@ -264,16 +335,15 @@ export default function (pi: ExtensionAPI) {
     await appendToDailyFile(ctx, root, projectName, sessionId, role, text);
   });
 
-  // Command: /obsidian-logger [on|off|tmp|vault] (no arg = toggle on/off)
+  // Command: /obsidian-logger [on|off|tmp|vault|thinking [on|off]] (no arg = toggle on/off)
   pi.registerCommand("obsidian-logger", {
-    description: "Toggle Obsidian logging (on|off) or switch target (tmp|vault)",
+    description: "Toggle logging (on|off), switch target (tmp|vault), or log reasoning (thinking [on|off])",
     handler: async (args, ctx) => {
       const arg = (args || "").trim().toLowerCase();
-      const onOff = enabled ? "ON" : "OFF";
 
       if (arg === "tmp") {
         logTarget = "tmp";
-        if (ctx.hasUI) ctx.ui.notify(`Obsidian logger: ${onOff} (target: tmp) — logging to ${TMP_ROOT}`, "info");
+        if (ctx.hasUI) ctx.ui.notify(`Obsidian logger: ${state()} — logging to ${TMP_ROOT}`, "info");
         return;
       }
 
@@ -283,7 +353,16 @@ export default function (pi: ExtensionAPI) {
           return;
         }
         logTarget = "vault";
-        if (ctx.hasUI) ctx.ui.notify(`Obsidian logger: ${onOff} (target: vault) — logging to ${join(vaultPath, "Projects", projectName)}`, "info");
+        if (ctx.hasUI) ctx.ui.notify(`Obsidian logger: ${state()} — logging to ${join(vaultPath, "Projects", projectName)}`, "info");
+        return;
+      }
+
+      if (arg === "thinking" || arg.startsWith("thinking ")) {
+        const sub = arg.split(" ")[1];
+        if (sub === "on") logThinking = true;
+        else if (sub === "off") logThinking = false;
+        else logThinking = !logThinking;
+        if (ctx.hasUI) ctx.ui.notify(`Obsidian logger: ${state()} — reasoning ${logThinking ? "now logged" : "no longer logged"}`, "info");
         return;
       }
 
@@ -295,7 +374,7 @@ export default function (pi: ExtensionAPI) {
         enabled = !enabled;
       }
 
-      if (ctx.hasUI) ctx.ui.notify(`Obsidian logger: ${enabled ? "ON" : "OFF"} (target: ${logTarget})`, enabled ? "info" : "warning");
+      if (ctx.hasUI) ctx.ui.notify(`Obsidian logger: ${state()}`, enabled ? "info" : "warning");
     },
   });
 }
