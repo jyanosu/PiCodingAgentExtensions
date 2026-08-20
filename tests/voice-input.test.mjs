@@ -313,7 +313,7 @@ case "$last" in /*) printf 'RIFF' > "$last";; esac
     const dur = parseFloat(args[args.indexOf("-t") + 1]);
     assert.ok(
       dur > 3.7 && dur < 4.3,
-      `trim duration ≈ 4.0s (speech end), got ${dur}`
+      `trim duration ≈ 4.0s (speech end), got ${dur}`,
     );
   } finally {
     process.env.PATH = oldPath;
@@ -322,7 +322,9 @@ case "$last" in /*) printf 'RIFF' > "$last";; esac
     if (oldLog === undefined) delete process.env.FAKE_FFMPEG_LOG;
     else process.env.FAKE_FFMPEG_LOG = oldLog;
   }
-  ok("Alt+Q flow trims trailing silence (silenceEnd reaches the shortcut path)");
+  ok(
+    "Alt+Q flow trims trailing silence (silenceEnd reaches the shortcut path)",
+  );
 }
 
 console.log(`\n${passed} test groups passed`);

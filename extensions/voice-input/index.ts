@@ -473,7 +473,10 @@ export default function (pi: ExtensionAPI) {
           // Trim to silence end if detected (manual stop has no silenceEnd)
           let audioFile = tempFile;
           if (silenceEnd !== undefined) {
-            const trimmedFile = join(tmpdir(), `voice-trimmed-${Date.now()}.wav`);
+            const trimmedFile = join(
+              tmpdir(),
+              `voice-trimmed-${Date.now()}.wav`,
+            );
             await trimAudio(tempFile, trimmedFile, silenceEnd);
             filesToDelete.push(trimmedFile);
             audioFile = trimmedFile;
