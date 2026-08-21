@@ -1,5 +1,66 @@
 # Startup Issues — PiCodingAgentExtensions
 
+## Startup pass 2026-08-21 (read-only, 3rd — `main` @ f5b847b, **Windows machine**)
+
+Typecheck passes (`npm run typecheck`, strict, exit 0). Working tree clean on
+`main` (PR #9 merged; local `guard` branch has no commits ahead). All 11
+README extensions present. All 15 fixes from the 2026-08-20 pass verified
+present in code (spot-checked: git timeout, WAV cleanup hoisting,
+`parseMaxDuration` n>=1, rm long flags, `homedir()`, POSIX path check,
+`{{PREVIOUS_SUMMARY}}` placeholder, `readmeChecked` reset, dead `STATE_KEY`
+gone, custom-entry restore).
+
+### New finding: test suites are not Windows-portable (fail on this machine)
+
+Previous passes ran in a Linux container where both suites passed. On this
+Windows box (Node v26.2.0, real ffmpeg at
+`C:\ProgramData\chocolatey\bin\ffmpeg.exe`) both fail:
+
+1. **tests/danger-guard.test.mjs — 4 POSIX-only expectations.**
+   - `["cd /", "/"]` → `findOutsideNavigation` returns `C:\` on Windows
+     (`pathResolve(cwd, "/")` = drive root).
+   - `["cd /tmp", "/tmp"]` → returns `C:\tmp`.
+   - `['cd "/tmp/dots..name"', "/tmp/dots..name"]` → returns `C:\tmp\dots..name`.
+   - Root-cwd test `findOutsideNavigation("cd /tmp", "/")` → returns
+     `C:\tmp`, expected `null` (`pathResolve("/", "/tmp")` = `C:\tmp`,
+     which does not start with `/`).
+   - The runtime function itself is platform-correct (uses `pathResolve` +
+     `pathSep`, handles `C:\` root boundary) — only the test expectations are
+     POSIX-only. Fix: derive expectations via `pathResolve` like the
+     home-dependent cases already do, or skip the absolute-`/` cases on
+     `win32`.
+2. **tests/voice-input.test.mjs — fake ffmpeg is a bash script.**
+   - Fake `ffmpeg` written as `#!/usr/bin/env bash` with PATH joined by `:`
+     → unexecutable on Windows. Real ffmpeg (chocolatey) is spawned instead,
+     fails to open `audio=any-device`, exits → `recordAudio` resolves via the
+     `close` path with `silenceEnd: undefined` → assertion fails at line 135
+     ("silenceEnd ≈ 4.0s (speech end), got undefined").
+   - The file aborts there, so the Alt+Q state-machine groups below it never
+     run on Windows.
+   - Fix: make the fake ffmpeg a Node script with a platform-correct PATH
+     separator (`path.delimiter`) and a `.cmd`/direct-node invocation, or gate
+     the two fake-ffmpeg groups to `process.platform !== "win32"`.
+
+### Minor / smells
+
+1. **README install command incomplete** — `cp extensions/*.ts
+   ~/.pi/agent/extensions/` does not copy the `voice-input/` and
+   `obsidian-logger/` directories (the live-install drift in the 2026-08-20
+   pass was exactly this). README should add the two `cp -r` lines.
+2. **auto-continue.ts:63** — 800ms `setTimeout` callback calls
+   `ctx.isIdle()` unguarded; a session reload inside the window throws
+   "stale" → unhandled rejection (same class as the intentionally-unfixed
+   response-latency stale-ctx timer). Wrap in try/catch or check staleness.
+3. **working-indicator.ts** — only file tab-indented (rest of repo: 2
+   spaces). Cosmetic; a prettier pass would normalize it.
+
+### What looks good
+
+- danger-guard nav guard (PR #9) is clean: pure exported `findOutsideNavigation` / `matchGuard`, virtual-cwd chaining, root-cwd boundary edge handled, pattern-precedence documented (R4) and tested.
+- voice-input cleanup discipline is now consistent across `/voice` and Alt+Q (files hoisted, trimmed file pushed before trim, idempotent stop, busy guard).
+- obsidian-logger frontmatter creation is race-safe (per-file `wx` open serialized through `fileCreations` map).
+- No secrets in repo; `.env` gitignored; look.ts PowerShell is a fixed string (no injection).
+
 ## Startup pass 2026-08-20 (read-only, 2nd — branch `guard-updates` == `main` @ 2a10399)
 
 Typecheck passes (`npm run typecheck`, strict, exit 0). Both test suites pass:
