@@ -15,7 +15,10 @@
  * or export OBSIDIAN_VAULT_PATH environment variable.
  */
 
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type {
+  ExtensionAPI,
+  ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import { parseSkillBlock } from "@earendil-works/pi-coding-agent";
 import { appendFile, mkdir, open, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -47,7 +50,10 @@ function loadEnvFile(envPath: string): Record<string, string> {
       const key = trimmed.slice(0, eqIndex).trim();
       let value = trimmed.slice(eqIndex + 1).trim();
       // Strip surrounding quotes
-      if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+      if (
+        (value.startsWith('"') && value.endsWith('"')) ||
+        (value.startsWith("'") && value.endsWith("'"))
+      ) {
         value = value.slice(1, -1);
       }
       env[key] = value;
@@ -60,7 +66,8 @@ function loadEnvFile(envPath: string): Record<string, string> {
 
 /** Read enabled value from config (env var or .env file). Default: true. */
 function readEnabledFromConfig(): boolean {
-  const parse = (v: string) => v.toLowerCase() !== "false" && v !== "0" && v.toLowerCase() !== "off";
+  const parse = (v: string) =>
+    v.toLowerCase() !== "false" && v !== "0" && v.toLowerCase() !== "off";
 
   // Try environment variable first
   const envVal = process.env.OBSIDIAN_LOGGER_ENABLED;
@@ -69,7 +76,8 @@ function readEnabledFromConfig(): boolean {
   // Try .env file next to this extension
   const envFile = join(__dirname, ".env");
   const envVars = loadEnvFile(envFile);
-  if ("OBSIDIAN_LOGGER_ENABLED" in envVars) return parse(envVars.OBSIDIAN_LOGGER_ENABLED);
+  if ("OBSIDIAN_LOGGER_ENABLED" in envVars)
+    return parse(envVars.OBSIDIAN_LOGGER_ENABLED);
 
   // Default: enabled
   return true;
@@ -134,11 +142,16 @@ function extractUserText(content: unknown): string {
 function stripSkillExpansion(text: string): string {
   const skill = parseSkillBlock(text);
   if (!skill) return text;
-  return skill.userMessage ? `/skill:${skill.name} ${skill.userMessage}` : `/skill:${skill.name}`;
+  return skill.userMessage
+    ? `/skill:${skill.name} ${skill.userMessage}`
+    : `/skill:${skill.name}`;
 }
 
 /** Extract assistant text (excluding tool calls; thinking only when included) */
-function extractAssistantText(content: unknown, includeThinking = false): string {
+function extractAssistantText(
+  content: unknown,
+  includeThinking = false,
+): string {
   if (!Array.isArray(content)) return "";
 
   const parts: string[] = [];
@@ -150,14 +163,19 @@ function extractAssistantText(content: unknown, includeThinking = false): string
       parts.push(b.text);
     } else if (includeThinking && b.type === "thinking") {
       // Foldable in Obsidian; keeps the visible response uncluttered
-      parts.push(`<details>\n<summary>🧠 Reasoning</summary>\n\n${b.text}\n\n</details>`);
+      parts.push(
+        `<details>\n<summary>🧠 Reasoning</summary>\n\n${b.text}\n\n</details>`,
+      );
     }
   }
   return parts.join("\n");
 }
 
 /** Ensure a README.md exists in the project folder with the full path info */
-async function ensureProjectReadme(vaultPath: string, projectName: string): Promise<void> {
+async function ensureProjectReadme(
+  vaultPath: string,
+  projectName: string,
+): Promise<void> {
   const projectFolder = join(vaultPath, "Projects", projectName);
   const readmePath = join(projectFolder, "README.md");
 
@@ -174,9 +192,10 @@ async function ensureProjectReadme(vaultPath: string, projectName: string): Prom
     await mkdir(projectFolder, { recursive: true });
     await writeFile(readmePath, content, "utf-8");
   } catch (err) {
-    const msg = typeof err === "object" && err !== null && "message" in err
-      ? (err as { message: string }).message
-      : String(err);
+    const msg =
+      typeof err === "object" && err !== null && "message" in err
+        ? (err as { message: string }).message
+        : String(err);
     console.error(`[obsidian-logger] Failed to create README.md: ${msg}`);
   }
 }
@@ -184,9 +203,14 @@ async function ensureProjectReadme(vaultPath: string, projectName: string): Prom
 /** Best-effort git branch of cwd (undefined when not a git repo) */
 function getGitBranch(cwd: string): Promise<string | undefined> {
   return new Promise((resolve) => {
-    execFile("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd, timeout: 2000 }, (err, stdout) => {
-      resolve(err ? undefined : stdout.trim() || undefined);
-    });
+    execFile(
+      "git",
+      ["rev-parse", "--abbrev-ref", "HEAD"],
+      { cwd, timeout: 2000 },
+      (err, stdout) => {
+        resolve(err ? undefined : stdout.trim() || undefined);
+      },
+    );
   });
 }
 
@@ -199,7 +223,11 @@ function yq(v: string): string {
 }
 
 /** YAML frontmatter written once when a daily file is first created */
-async function buildFrontmatter(ctx: ExtensionContext, projectName: string, sessionId: string): Promise<string> {
+async function buildFrontmatter(
+  ctx: ExtensionContext,
+  projectName: string,
+  sessionId: string,
+): Promise<string> {
   const model = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "unknown";
   const branch = await getGitBranch(ctx.cwd);
   const lines = [
@@ -219,7 +247,14 @@ async function buildFrontmatter(ctx: ExtensionContext, projectName: string, sess
 const fileCreations = new Map<string, Promise<void>>();
 
 /** Append content to the daily MD file */
-async function appendToDailyFile(ctx: ExtensionContext, vaultPath: string, projectName: string, sessionId: string, role: string, text: string): Promise<void> {
+async function appendToDailyFile(
+  ctx: ExtensionContext,
+  vaultPath: string,
+  projectName: string,
+  sessionId: string,
+  role: string,
+  text: string,
+): Promise<void> {
   if (!text.trim()) return;
 
   const dateStr = formatDate();
@@ -248,7 +283,10 @@ async function appendToDailyFile(ctx: ExtensionContext, vaultPath: string, proje
         try {
           const fh = await open(filePath, "wx");
           try {
-            await fh.writeFile(await buildFrontmatter(ctx, projectName, sessionId), "utf-8");
+            await fh.writeFile(
+              await buildFrontmatter(ctx, projectName, sessionId),
+              "utf-8",
+            );
           } finally {
             await fh.close();
           }
@@ -264,9 +302,10 @@ async function appendToDailyFile(ctx: ExtensionContext, vaultPath: string, proje
     // sessions) and lost entries when two message_end events overlap.
     await appendFile(filePath, entry, "utf-8");
   } catch (err) {
-    const msg = typeof err === "object" && err !== null && "message" in err
-      ? (err as { message: string }).message
-      : String(err);
+    const msg =
+      typeof err === "object" && err !== null && "message" in err
+        ? (err as { message: string }).message
+        : String(err);
     console.error(`[obsidian-logger] Failed to write: ${msg}`);
     if (ctx.hasUI) {
       ctx.ui.notify(`Obsidian logger write failed: ${msg}`, "warning");
@@ -284,15 +323,20 @@ export default function (pi: ExtensionAPI) {
   let readmeChecked = false;
 
   /** Full state string for notifications */
-  const state = () => `${enabled ? "ON" : "OFF"} (target: ${logTarget}, thinking: ${logThinking ? "on" : "off"})`;
+  const state = () =>
+    `${enabled ? "ON" : "OFF"} (target: ${logTarget}, thinking: ${logThinking ? "on" : "off"})`;
 
   pi.on("session_start", async (_event, ctx) => {
     enabled = readEnabledFromConfig();
     logTarget = "vault";
     logThinking = false;
+    // Reset so a new session (possibly in a different cwd/project) gets its own README
+    readmeChecked = false;
 
     if (!enabled) {
-      console.log("[obsidian-logger] Logger disabled (OBSIDIAN_LOGGER_ENABLED not set or false).");
+      console.log(
+        "[obsidian-logger] Logger disabled (OBSIDIAN_LOGGER_ENABLED not set or false).",
+      );
       if (ctx.hasUI) ctx.ui.notify(`Obsidian logger: ${state()}`, "warning");
       return;
     }
@@ -302,8 +346,14 @@ export default function (pi: ExtensionAPI) {
     sessionId = ctx.sessionManager.getSessionId();
 
     if (!vaultPath) {
-      console.log("[obsidian-logger] OBSIDIAN_VAULT_PATH not set. Set it in .env file next to the extension or as an environment variable, or use /obsidian-logger tmp to log to the temp directory.");
-      if (ctx.hasUI) ctx.ui.notify(`Obsidian logger: ${state()} (no vault path set — use /obsidian-logger tmp)`, "info");
+      console.log(
+        "[obsidian-logger] OBSIDIAN_VAULT_PATH not set. Set it in .env file next to the extension or as an environment variable, or use /obsidian-logger tmp to log to the temp directory.",
+      );
+      if (ctx.hasUI)
+        ctx.ui.notify(
+          `Obsidian logger: ${state()} (no vault path set — use /obsidian-logger tmp)`,
+          "info",
+        );
       return;
     }
 
@@ -322,9 +372,10 @@ export default function (pi: ExtensionAPI) {
     const role = event.message.role;
     if (role !== "user" && role !== "assistant") return;
 
-    const text = role === "user"
-      ? stripSkillExpansion(extractUserText(event.message.content))
-      : extractAssistantText(event.message.content, logThinking);
+    const text =
+      role === "user"
+        ? stripSkillExpansion(extractUserText(event.message.content))
+        : extractAssistantText(event.message.content, logThinking);
 
     // Ensure README.md exists on first vault write of session (never in temp mode)
     if (logTarget === "vault" && !readmeChecked) {
@@ -337,23 +388,36 @@ export default function (pi: ExtensionAPI) {
 
   // Command: /obsidian-logger [on|off|tmp|vault|thinking [on|off]] (no arg = toggle on/off)
   pi.registerCommand("obsidian-logger", {
-    description: "Toggle logging (on|off), switch target (tmp|vault), or log reasoning (thinking [on|off])",
+    description:
+      "Toggle logging (on|off), switch target (tmp|vault), or log reasoning (thinking [on|off])",
     handler: async (args, ctx) => {
       const arg = (args || "").trim().toLowerCase();
 
       if (arg === "tmp") {
         logTarget = "tmp";
-        if (ctx.hasUI) ctx.ui.notify(`Obsidian logger: ${state()} — logging to ${TMP_ROOT}`, "info");
+        if (ctx.hasUI)
+          ctx.ui.notify(
+            `Obsidian logger: ${state()} — logging to ${TMP_ROOT}`,
+            "info",
+          );
         return;
       }
 
       if (arg === "vault") {
         if (!vaultPath) {
-          if (ctx.hasUI) ctx.ui.notify(`No vault configured — staying in tmp mode`, "warning");
+          if (ctx.hasUI)
+            ctx.ui.notify(
+              `No vault configured — staying in tmp mode`,
+              "warning",
+            );
           return;
         }
         logTarget = "vault";
-        if (ctx.hasUI) ctx.ui.notify(`Obsidian logger: ${state()} — logging to ${join(vaultPath, "Projects", projectName)}`, "info");
+        if (ctx.hasUI)
+          ctx.ui.notify(
+            `Obsidian logger: ${state()} — logging to ${join(vaultPath, "Projects", projectName)}`,
+            "info",
+          );
         return;
       }
 
@@ -362,7 +426,11 @@ export default function (pi: ExtensionAPI) {
         if (sub === "on") logThinking = true;
         else if (sub === "off") logThinking = false;
         else logThinking = !logThinking;
-        if (ctx.hasUI) ctx.ui.notify(`Obsidian logger: ${state()} — reasoning ${logThinking ? "now logged" : "no longer logged"}`, "info");
+        if (ctx.hasUI)
+          ctx.ui.notify(
+            `Obsidian logger: ${state()} — reasoning ${logThinking ? "now logged" : "no longer logged"}`,
+            "info",
+          );
         return;
       }
 
@@ -374,7 +442,11 @@ export default function (pi: ExtensionAPI) {
         enabled = !enabled;
       }
 
-      if (ctx.hasUI) ctx.ui.notify(`Obsidian logger: ${state()}`, enabled ? "info" : "warning");
+      if (ctx.hasUI)
+        ctx.ui.notify(
+          `Obsidian logger: ${state()}`,
+          enabled ? "info" : "warning",
+        );
     },
   });
 }

@@ -49,7 +49,10 @@ export default function (pi: ExtensionAPI) {
       const elapsed = Date.now() - messageStart;
       const phase = getPhase(elapsed);
 
-      const status = ctx.ui.theme.fg(phase.color, `${phase.icon} ${formatTime(elapsed)} (${phase.label})`);
+      const status = ctx.ui.theme.fg(
+        phase.color,
+        `${phase.icon} ${formatTime(elapsed)} (${phase.label})`,
+      );
       ctx.ui.setStatus("response-latency", status);
     };
 
@@ -61,16 +64,25 @@ export default function (pi: ExtensionAPI) {
     if (messageStart) {
       const elapsed = Date.now() - messageStart;
       const phase = getPhase(elapsed);
-      const status = ctx.ui.theme.fg(phase.color, `${phase.icon} ${formatTime(elapsed)} ✓`);
+      const status = ctx.ui.theme.fg(
+        phase.color,
+        `${phase.icon} ${formatTime(elapsed)} ✓`,
+      );
       ctx.ui.setStatus("response-latency", status);
     }
     messageStart = 0;
     clearTimer();
 
-    // Clear after brief delay so user sees final time
+    // Clear after brief delay so user sees final time.
+    // The ctx may be stale by then (session reloaded) — a stale ctx.ui.setStatus
+    // throws, so swallow it: the status bar of the new session owns its own state.
     setTimeout(() => {
       if (!messageStart) {
-        ctx.ui.setStatus("response-latency", undefined);
+        try {
+          ctx.ui.setStatus("response-latency", undefined);
+        } catch {
+          // stale ctx — nothing to clear
+        }
       }
     }, 2000);
   };

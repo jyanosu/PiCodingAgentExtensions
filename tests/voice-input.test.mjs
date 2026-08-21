@@ -33,14 +33,16 @@ assert.equal(voiceTextToInput("SLASH compact now"), "/compact now");
 assert.equal(voiceTextToInput("slash"), "slash");
 ok("voiceTextToInput rewrites spoken slash commands");
 
-// --- parseMaxDuration: default 20s, cap 60s ---
+// --- parseMaxDuration: any n >= 1 honored, default 20s, cap 60s ---
 assert.equal(parseMaxDuration("/voice"), 20);
+assert.equal(parseMaxDuration("/voice 1"), 1);
+assert.equal(parseMaxDuration("/voice 2"), 2);
 assert.equal(parseMaxDuration("/voice 10"), 10);
 assert.equal(parseMaxDuration("/voice 30"), 30);
 assert.equal(parseMaxDuration("/voice 100"), 60);
-assert.equal(parseMaxDuration("/voice 2"), 20);
+assert.equal(parseMaxDuration("/voice 0"), 20);
 assert.equal(parseMaxDuration("/voice abc"), 20);
-ok("parseMaxDuration defaults 20s, caps 60s");
+ok("parseMaxDuration honors n>=1, defaults 20s, caps 60s");
 
 // --- recordAudio: stop() wiring ---
 {

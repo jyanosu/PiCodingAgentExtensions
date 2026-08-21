@@ -1,4 +1,7 @@
-import type { ExtensionAPI, SessionEntry } from "@earendil-works/pi-coding-agent";
+import type {
+  ExtensionAPI,
+  SessionEntry,
+} from "@earendil-works/pi-coding-agent";
 
 type CustomEntry = Extract<SessionEntry, { type: "custom" }>;
 
@@ -12,14 +15,12 @@ type CustomEntry = Extract<SessionEntry, { type: "custom" }>;
  * Toggle with /autocontinue (on by default).
  */
 
-const STATE_KEY = "auto-continue:enabled";
-
 // Patterns that look like raw/unexecuted tool-call XML
 const RAW_TOOL_CALL_PATTERNS = [
-  /<function\s*=/i,           // <function=bash ...>
-  /<\/function>/i,            // closing tag without execution
-  /<tool_use\s*name/i,       // Anthropic-style raw
-  /<antThinking>/i,          // leaked thinking block as text
+  /<function\s*=/i, // <function=bash ...>
+  /<\/function>/i, // closing tag without execution
+  /<tool_use\s*name/i, // Anthropic-style raw
+  /<antThinking>/i, // leaked thinking block as text
 ];
 
 export default function (pi: ExtensionAPI) {
@@ -28,9 +29,12 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_start", (_event, ctx) => {
     // Restore state from the most recent persisted entry
     const entries = ctx.sessionManager.getEntries();
-    const last = [...entries].reverse().find(
-      (e): e is CustomEntry => e.type === "custom" && e.customType === "auto-continue-state",
-    );
+    const last = [...entries]
+      .reverse()
+      .find(
+        (e): e is CustomEntry =>
+          e.type === "custom" && e.customType === "auto-continue-state",
+      );
     if (last && typeof last.data === "string") {
       enabled = last.data === "on";
     }
@@ -43,7 +47,7 @@ export default function (pi: ExtensionAPI) {
     if (!text) return;
 
     // Check for raw tool-call XML in the output
-    const hasRawToolCall = RAW_TOOL_CALL_PATTERNS.some(p => p.test(text));
+    const hasRawToolCall = RAW_TOOL_CALL_PATTERNS.some((p) => p.test(text));
     if (!hasRawToolCall) return;
 
     // Make sure no tools were actually executed this turn (otherwise it's just text about XML)
@@ -51,13 +55,17 @@ export default function (pi: ExtensionAPI) {
     const closingTags = (text.match(/<\/function>/gi) || []).length;
 
     // Only auto-continue if there are balanced tags (looks like a real unexecuted call)
-    if (toolCallMentions === 0 || Math.abs(toolCallMentions - closingTags) > 1) return;
+    if (toolCallMentions === 0 || Math.abs(toolCallMentions - closingTags) > 1)
+      return;
 
     // Small delay so the TUI renders first, then auto-send continue
     setTimeout(() => {
       if (enabled && ctx.isIdle()) {
         pi.sendUserMessage("continue", { deliverAs: "followUp" });
-        ctx.ui.notify("auto-continue: detected raw tool call, resuming...", "info");
+        ctx.ui.notify(
+          "auto-continue: detected raw tool call, resuming...",
+          "info",
+        );
       }
     }, 800);
   });
@@ -72,7 +80,10 @@ export default function (pi: ExtensionAPI) {
     description: "Toggle auto-continue for raw tool-call XML",
     handler: async (_args, ctx) => {
       enabled = !enabled;
-      ctx.ui.notify(`auto-continue: ${enabled ? "ON" : "OFF"}`, enabled ? "info" : "warning");
+      ctx.ui.notify(
+        `auto-continue: ${enabled ? "ON" : "OFF"}`,
+        enabled ? "info" : "warning",
+      );
     },
   });
 }

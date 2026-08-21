@@ -11,7 +11,7 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { execFile, execSync, spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { readFile, writeFile, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -20,13 +20,10 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-/** Detect available microphones via FFmpeg DirectShow, return first real hardware mic */
-function detectDefaultMic(): string | null {
-  try {
-    const output = execSync(
-      "ffmpeg -list_devices true -f dshow -i dummy 2>&1",
-      { encoding: "utf8" },
-    );
+/** Detect available microphones via FFmpeg DirectShow, return first real hardware mic.
+ *  Async (execFile) — dshow probing can take a second and must not block the event loop. */
+function detectDefaultMic(): Promise<string | null> {
+  const pick = (output: string): string | null => {
     const virtualNames = [
       "steam",
       "nvidia",
@@ -50,10 +47,24 @@ function detectDefaultMic(): string | null {
       const match = line.match(/"([^"]+)"/);
       if (match) return match[1];
     }
-  } catch {
-    return null; // ffmpeg missing or dshow unavailable — caller uses fallback mic
-  }
-  return null;
+    return null;
+  };
+  return new Promise((resolve) => {
+    // dshow lists devices on stderr; capture both streams
+    execFile(
+      "ffmpeg",
+      ["-list_devices", "true", "-f", "dshow", "-i", "dummy"],
+      { timeout: 10000, maxBuffer: 1024 * 1024 },
+      (err, stdout, stderr) => {
+        const output = `${stdout}\n${stderr}`;
+        if (err && !output.trim()) {
+          resolve(null); // ffmpeg missing or dshow unavailable — caller uses fallback mic
+          return;
+        }
+        resolve(pick(output));
+      },
+    );
+  });
 }
 
 /** Load .env file next to this extension (simple KEY=VALUE parser) */
@@ -82,12 +93,12 @@ function loadEnvFile(envPath: string): Record<string, string> {
   }
 }
 
-function getConfig(): {
+async function getConfig(): Promise<{
   whisperUrl: string;
   micDevice: string;
   micSource: "env" | "auto" | "fallback";
   silenceDuration: number;
-} {
+}> {
   const envFile = join(__dirname, ".env");
   const envVars = loadEnvFile(envFile);
 
@@ -99,7 +110,7 @@ function getConfig(): {
   let micSource: "env" | "auto" | "fallback" = "env";
   // Auto-detect first real hardware mic if not configured
   if (!micDevice) {
-    const detected = detectDefaultMic();
+    const detected = await detectDefaultMic();
     micDevice = detected || "Microphone (HyperX SoloCast)";
     micSource = detected ? "auto" : "fallback";
   }
@@ -217,7 +228,9 @@ export function recordAudio(
         if (settled || rejected) return;
         settled = true;
         if (maxTimer) clearTimeout(maxTimer);
-        if (proc.exitCode === null) {
+        // Only kill a process that actually spawned (pid undefined = spawn failed,
+        // e.g. ffmpeg missing — the pending error event will reject on its own).
+        if (proc.exitCode === null && proc.pid !== undefined) {
           try {
             proc.kill();
           } catch (err) {
@@ -366,12 +379,12 @@ async function transcribe(
   return data.text || "";
 }
 
-/** Parse optional max duration from "/voice" or "/voice 30" */
+/** Parse optional max duration from "/voice" or "/voice 30" (any n >= 1, capped at 60s) */
 export function parseMaxDuration(text: string): number {
   const parts = text.split(/\s+/);
   if (parts.length >= 2) {
     const n = parseInt(parts[1], 10);
-    if (!isNaN(n) && n > 2 && n <= 120) return Math.min(n, 60);
+    if (!isNaN(n) && n > 0 && n <= 120) return Math.min(n, 60);
   }
   return 20;
 }
@@ -415,7 +428,7 @@ export default function (pi: ExtensionAPI) {
   let recordingSince = 0;
 
   pi.on("session_start", async (_event, ctx) => {
-    config = getConfig();
+    config = await getConfig();
     ctx.ui.setStatus("voice", "ready");
     ctx.ui.notify(
       `Voice input: ready (/voice or Alt+Q — stops after ${config.silenceDuration}s silence or Alt+Q, mic: ${config.micDevice})`,
@@ -443,6 +456,7 @@ export default function (pi: ExtensionAPI) {
       busy = true;
       // Detached flow: the handler returns immediately so a second Alt+Q press can stop it.
       void (async () => {
+        const filesToDelete: string[] = [];
         try {
           recordingSince = Date.now();
           ctx.ui.notify(
@@ -468,17 +482,18 @@ export default function (pi: ExtensionAPI) {
             return;
           }
 
-          const filesToDelete = [tempFile];
+          filesToDelete.push(tempFile);
 
-          // Trim to silence end if detected (manual stop has no silenceEnd)
+          // Trim to silence end if detected (manual stop has no silenceEnd).
+          // Push the trimmed file BEFORE trimming so a partial file is still cleaned up on error.
           let audioFile = tempFile;
           if (silenceEnd !== undefined) {
             const trimmedFile = join(
               tmpdir(),
               `voice-trimmed-${Date.now()}.wav`,
             );
-            await trimAudio(tempFile, trimmedFile, silenceEnd);
             filesToDelete.push(trimmedFile);
+            await trimAudio(tempFile, trimmedFile, silenceEnd);
             audioFile = trimmedFile;
           }
 
@@ -495,6 +510,8 @@ export default function (pi: ExtensionAPI) {
             ctx.ui.notify("Voice: no speech detected", "warning");
           }
         } catch (err) {
+          // Clean up any temp files on error
+          for (const f of filesToDelete) await unlink(f).catch(() => {});
           const msg =
             typeof err === "object" && err !== null && "message" in err
               ? (err as { message: string }).message
@@ -559,12 +576,13 @@ export default function (pi: ExtensionAPI) {
         return { action: "handled" };
       }
 
-      // Trim to silence end if detected (manual stop has no silenceEnd)
+      // Trim to silence end if detected (manual stop has no silenceEnd).
+      // Push the trimmed file BEFORE trimming so a partial file is still cleaned up on error.
       let audioFile = tempFile;
       if (silenceEnd !== undefined) {
         const trimmedFile = join(tmpdir(), `voice-trimmed-${Date.now()}.wav`);
-        await trimAudio(tempFile, trimmedFile, silenceEnd);
         filesToDelete.push(trimmedFile);
+        await trimAudio(tempFile, trimmedFile, silenceEnd);
         audioFile = trimmedFile;
       }
 

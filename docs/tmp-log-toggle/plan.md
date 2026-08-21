@@ -28,6 +28,7 @@ break R5, tmp without vault). Command handler accepts `on|off|` (no arg =
 toggle). Full design in spec §Design.
 
 **Proposed approach**
+
 1. Add `import { tmpdir } from "node:os"`; module-level `TMP_ROOT` constant
    and `let logTarget: "vault" | "tmp" = "vault";`.
 2. `session_start`: reset `logTarget = "vault"` on every start (covers
@@ -44,6 +45,7 @@ toggle). Full design in spec §Design.
    - Append `(target: ${logTarget})` to all notifications.
 
 **Acceptance criteria** (outcomes; R-numbers = spec requirements)
+
 - New session writes to vault exactly as before (R1).
 - After `/obsidian-logger tmp`, subsequent user + assistant messages land in
   `{tmpdir}/pi-obsidian-logger/Projects/{project}/{sessionId}/{MM-DD-YYYY}.md`
@@ -58,6 +60,7 @@ toggle). Full design in spec §Design.
 **Spec** — `full` (exists at `docs/tmp-log-toggle/spec.md`).
 
 **Verify**
+
 1. `npm run typecheck` exits 0.
 2. Happy path: from repo root,
    `pi -e ./extensions/obsidian-logger/index.ts` (vault already set in
@@ -81,6 +84,7 @@ new subcommands in the extension README.
 file must be moved aside (env var is not set in this environment).
 
 **Proposed approach**
+
 1. `mv extensions/obsidian-logger/.env extensions/obsidian-logger/.env.bak`.
 2. Run `pi -e ./extensions/obsidian-logger/index.ts`; `/obsidian-logger tmp`
    → prompt → confirm file lands in temp root. `/obsidian-logger vault` →
@@ -92,6 +96,7 @@ file must be moved aside (env var is not set in this environment).
    session-only scope, and that tmp mode works without a vault configured.
 
 **Acceptance criteria**
+
 - No-vault + `tmp` logs successfully to the temp root (R5 verified live).
 - No-vault + `vault` warns and leaves target unchanged (R6 verified live).
 - README documents both subcommands, temp location, and session-only scope.
@@ -99,9 +104,11 @@ file must be moved aside (env var is not set in this environment).
 **Spec** — `none`.
 
 **Verify**
+
 1. Step 2 observations above (notifications + file locations).
-2. `git diff` shows `.env` restored byte-identical (it is tracked; `git
-   status` clean for that path after the rename-back).
+2. `git diff` shows `.env` restored byte-identical (it was tracked at the time;
+   since then it has been gitignored — `git status` clean for that path after
+   the rename-back).
 3. README renders sensibly (`git diff extensions/obsidian-logger/README.md`).
 
 **Ordering & risk** — Task 2 depends on Task 1. Risk low: single file, no
