@@ -114,7 +114,7 @@ Controls whether `web_search` opens the interactive browser curator. `/search-br
 
 ### obsidian-logger
 
-Appends user prompts and assistant responses (no thinking blocks, no tool output) to `{vault}/Projects/{project}/{sessionId}/MM-DD-YYYY.md`. Toggle with `/obsidian-logger on|off`.
+Appends user prompts and assistant responses (no thinking blocks, no tool output) to `{vault}/Projects/{project}/{sessionId}/MM-DD-YYYY.md`. Images attached to a prompt (e.g. `/look` screenshots) are saved to `{session}/images/` and embedded under the prompt entry. Toggle with `/obsidian-logger on|off`.
 
 Config via `.env` next to the extension or environment variables:
 

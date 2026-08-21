@@ -4,6 +4,9 @@
  * Records all user prompts and assistant responses (excluding thinking blocks)
  * to Markdown files in an Obsidian vault.
  *
+ * Images attached to user messages (e.g. /look screenshots) are saved to
+ * {session}/images/ and embedded under the prompt entry.
+ *
  * Folder structure: {root}/Projects/{projectName}/{sessionId}/MM-DD-YYYY.md
  * where {root} is the Obsidian vault by default, or the OS temp directory
  * (os.tmpdir()/pi-obsidian-logger) when switched via /obsidian-logger tmp.
@@ -134,6 +137,35 @@ function extractUserText(content: unknown): string {
   return parts.join("\n");
 }
 
+/** File extensions for image blocks we know how to embed. */
+const MIME_TO_EXT: Record<string, string> = {
+  "image/png": "png",
+  "image/jpeg": "jpg",
+  "image/gif": "gif",
+  "image/webp": "webp",
+  "image/bmp": "bmp",
+};
+
+/** Extract attached image blocks (base64) from a user message's content. */
+export function extractUserImages(
+  content: unknown,
+): Array<{ data: string; mimeType: string }> {
+  if (!Array.isArray(content)) return [];
+  const images: Array<{ data: string; mimeType: string }> = [];
+  for (const block of content) {
+    if (!block || typeof block !== "object") continue;
+    const b = block as { type?: string; data?: unknown; mimeType?: unknown };
+    if (
+      b.type === "image" &&
+      typeof b.data === "string" &&
+      typeof b.mimeType === "string"
+    ) {
+      images.push({ data: b.data, mimeType: b.mimeType });
+    }
+  }
+  return images;
+}
+
 /**
  * If the text is an expanded skill command (<skill ...>block</skill> + args),
  * reduce it to what the user actually typed (/skill:name args) so the vault
@@ -247,13 +279,15 @@ async function buildFrontmatter(
 const fileCreations = new Map<string, Promise<void>>();
 
 /** Append content to the daily MD file */
-async function appendToDailyFile(
+export async function appendToDailyFile(
   ctx: ExtensionContext,
   vaultPath: string,
   projectName: string,
   sessionId: string,
   role: string,
   text: string,
+  images: Array<{ data: string; mimeType: string }> = [],
+  target: "vault" | "tmp" = "vault",
 ): Promise<void> {
   if (!text.trim()) return;
 
@@ -267,7 +301,27 @@ async function appendToDailyFile(
   const timestamp = new Date().toLocaleTimeString();
   let entry = `\n${roleLabel} (${timestamp})\n\n`;
 
-  entry += `${text}\n\n---\n`;
+  entry += text;
+  // Embed attached images (e.g. /look screenshots) under the entry:
+  // write them to <session>/images/, then reference by name.
+  if (images.length > 0) {
+    const imgDir = join(folderPath, "images");
+    await mkdir(imgDir, { recursive: true });
+    const d = new Date();
+    const pad2 = (n: number) => String(n).padStart(2, "0");
+    const stamp = `${d.getFullYear()}${pad2(d.getMonth() + 1)}${pad2(d.getDate())}-${pad2(d.getHours())}${pad2(d.getMinutes())}${pad2(d.getSeconds())}`;
+    for (let i = 0; i < images.length; i++) {
+      const img = images[i];
+      const ext = MIME_TO_EXT[img.mimeType] ?? "png";
+      const name = `img-${stamp}-${i + 1}.${ext}`;
+      await writeFile(join(imgDir, name), Buffer.from(img.data, "base64"));
+      // vault: Obsidian wikilink (resolves anywhere in the vault);
+      // tmp: relative markdown link (no vault to resolve wikilinks)
+      entry +=
+        target === "vault" ? `\n\n![[${name}]]` : `\n\n![](images/${name})`;
+    }
+  }
+  entry += `\n\n---\n`;
 
   try {
     // Create folders if missing (kept inside try: a bad vault path must
@@ -376,6 +430,9 @@ export default function (pi: ExtensionAPI) {
       role === "user"
         ? stripSkillExpansion(extractUserText(event.message.content))
         : extractAssistantText(event.message.content, logThinking);
+    // Attached images (e.g. /look screenshots) are embedded with the prompt
+    const images =
+      role === "user" ? extractUserImages(event.message.content) : [];
 
     // Ensure README.md exists on first vault write of session (never in temp mode)
     if (logTarget === "vault" && !readmeChecked) {
@@ -383,7 +440,16 @@ export default function (pi: ExtensionAPI) {
       await ensureProjectReadme(root, projectName);
     }
 
-    await appendToDailyFile(ctx, root, projectName, sessionId, role, text);
+    await appendToDailyFile(
+      ctx,
+      root,
+      projectName,
+      sessionId,
+      role,
+      text,
+      images,
+      logTarget,
+    );
   });
 
   // Command: /obsidian-logger [on|off|tmp|vault|thinking [on|off]] (no arg = toggle on/off)

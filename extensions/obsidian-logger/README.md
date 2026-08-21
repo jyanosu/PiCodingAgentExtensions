@@ -6,11 +6,13 @@ or, per session, in the OS temp directory (cleared by the system over time).
 ## Setup
 
 1. Edit `.env` file (next to `index.ts`) and set your vault path:
+
    ```
    OBSIDIAN_VAULT_PATH=C:/Users/YourName/Documents/ObsidianVault
    ```
 
 2. Or set the environment variable:
+
    ```bash
    export OBSIDIAN_VAULT_PATH="C:/path/to/vault"
    ```
@@ -28,7 +30,7 @@ OBSIDIAN_LOGGER_ENABLED=false
 Use the `/obsidian-logger` command to toggle logging without restarting:
 
 | Command | Action |
-|---|---|
+| --- | --- |
 | `/obsidian-logger` | Toggle on/off |
 | `/obsidian-logger on` | Enable logging |
 | `/obsidian-logger off` | Disable logging |
@@ -41,7 +43,7 @@ By default, logs go to your Obsidian vault. For scratch sessions, switch the
 current session's logging to the OS temp directory:
 
 | Command | Action |
-|---|---|
+| --- | --- |
 | `/obsidian-logger tmp` | Log this session to `{tmpdir}/pi-obsidian-logger/...` |
 | `/obsidian-logger vault` | Switch back to the configured vault |
 
@@ -60,7 +62,7 @@ Assistant thinking blocks are **excluded by default**. To also log the model's
 reasoning for the current session:
 
 | Command | Action |
-|---|---|
+| --- | --- |
 | `/obsidian-logger thinking` | Toggle reasoning logging on/off |
 | `/obsidian-logger thinking on` | Enable reasoning logging |
 | `/obsidian-logger thinking off` | Disable reasoning logging |
@@ -74,6 +76,7 @@ reasoning for the current session:
 
 ```
 {root}/Projects/{projectName}/{sessionId}/MM-DD-YYYY.md
+{root}/Projects/{projectName}/{sessionId}/images/img-YYYYMMDD-HHMMSS-N.png
 ```
 
 `{root}` is your vault by default, or `{tmpdir}/pi-obsidian-logger` in temp mode.
@@ -83,6 +86,22 @@ Example: `C:/Vault/Projects/eVETAssist/abc123-def456/06-15-2025.md`
 - **Project name**: Last directory component of your working directory
 - **Session ID**: Unique Pi session UUID
 - **Date file**: MM-DD-YYYY format, appends if file exists
+- **images/**: attached images from user messages (created only when needed)
+
+### Image Embedding
+
+Images attached to a user prompt (e.g. a `/look` screenshot) are saved to the
+session's `images/` folder and embedded directly under the prompt entry, so
+the screenshot lives right where you asked about it.
+
+- **Vault mode**: embedded as an Obsidian wikilink `![[img-....png]]` (resolves
+  anywhere in the vault).
+- **Temp mode**: embedded as a relative markdown link `![](images/img-....png)`
+  (no vault to resolve wikilinks).
+- File name: `img-YYYYMMDD-HHMMSS-N.png` (N = position in the message).
+- Supported types: png, jpeg, gif, webp, bmp (anything else falls back to `.png`).
+
+## Markdown Format
 
 ## Markdown Format
 
@@ -102,6 +121,8 @@ created: 2026-08-19T13:30:00.000Z
 ## 👤 Prompt (10:30:45 AM)
 
 Your prompt text here...
+
+![[img-20250615-103044-1.png]]
 
 ---
 
