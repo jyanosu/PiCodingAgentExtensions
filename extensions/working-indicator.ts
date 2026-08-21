@@ -18,20 +18,40 @@
  */
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
+import { homedir } from "os";
 import { join } from "path";
-import type { ExtensionAPI, ExtensionContext, WorkingIndicatorOptions } from "@earendil-works/pi-coding-agent";
+import type {
+	ExtensionAPI,
+	ExtensionContext,
+	WorkingIndicatorOptions,
+} from "@earendil-works/pi-coding-agent";
 
-type WorkingIndicatorMode = "dot" | "none" | "pulse" | "spinner" | "auto" | "default";
+type WorkingIndicatorMode =
+	| "dot"
+	| "none"
+	| "pulse"
+	| "spinner"
+	| "auto"
+	| "default";
 
 // Config lives in the Pi config dir (~/.pi/agent), not the extensions folder.
-const CONFIG_DIR = process.env.PI_CODING_AGENT_DIR || join(process.env.HOME || "/root", ".pi", "agent");
+// homedir() is cross-platform (USERPROFILE on Windows; HOME usually unset there).
+const CONFIG_DIR =
+	process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
 const CONFIG_PATH = join(CONFIG_DIR, "working-indicator.json");
 
 function loadMode(): WorkingIndicatorMode {
 	try {
 		if (existsSync(CONFIG_PATH)) {
 			const data = JSON.parse(readFileSync(CONFIG_PATH, "utf8"));
-			const valid: WorkingIndicatorMode[] = ["dot", "none", "pulse", "spinner", "auto", "default"];
+			const valid: WorkingIndicatorMode[] = [
+				"dot",
+				"none",
+				"pulse",
+				"spinner",
+				"auto",
+				"default",
+			];
 			if (valid.includes(data.mode)) return data.mode;
 		}
 	} catch {
@@ -69,14 +89,23 @@ const HIDDEN_INDICATOR: WorkingIndicatorOptions = {
 };
 
 /** Context-aware phase labels for the status bar mini indicator. */
-const PHASE_LABELS: Record<string, { icon: string; label: string; message: string }> = {
+const PHASE_LABELS: Record<
+	string,
+	{ icon: string; label: string; message: string }
+> = {
 	thinking: { icon: ">>>", label: "thinking", message: "Reasoning..." },
-	streaming: { icon: "@@@", label: "streaming", message: "Generating response..." },
+	streaming: {
+		icon: "@@@",
+		label: "streaming",
+		message: "Generating response...",
+	},
 	tools: { icon: ">O<", label: "tool", message: "Running tools..." },
 	idle: { icon: "...", label: "idle", message: "Ready" },
 };
 
-function getIndicator(mode: WorkingIndicatorMode): WorkingIndicatorOptions | undefined {
+function getIndicator(
+	mode: WorkingIndicatorMode,
+): WorkingIndicatorOptions | undefined {
 	switch (mode) {
 		case "dot":
 			return {
@@ -137,7 +166,9 @@ export default function (pi: ExtensionAPI) {
 	let activeToolCount = 0;
 	let lastIndicatorKey: string = ""; // track to avoid redundant setWorkingIndicator calls
 
-	const getAutoIndicator = (phase: string): { key: string; options: WorkingIndicatorOptions } => {
+	const getAutoIndicator = (
+		phase: string,
+	): { key: string; options: WorkingIndicatorOptions } => {
 		switch (phase) {
 			case "thinking":
 				return {
@@ -212,7 +243,10 @@ export default function (pi: ExtensionAPI) {
 
 		// Update status bar with mini indicator showing current phase (always update).
 		const modeDesc = describeMode(mode);
-		const statusText = ctx.ui.theme.fg("dim", `${phaseInfo.icon} ${modeDesc} | ${phaseInfo.label}`);
+		const statusText = ctx.ui.theme.fg(
+			"dim",
+			`${phaseInfo.icon} ${modeDesc} | ${phaseInfo.label}`,
+		);
 		ctx.ui.setStatus("working-indicator", statusText);
 	};
 
@@ -280,11 +314,15 @@ export default function (pi: ExtensionAPI) {
 	// --- Command ---
 
 	pi.registerCommand("working-indicator", {
-		description: "Set the streaming working indicator: dot, pulse, none, spinner, auto, or reset.",
+		description:
+			"Set the streaming working indicator: dot, pulse, none, spinner, auto, or reset.",
 		handler: async (args, ctx) => {
 			const nextMode = args.trim().toLowerCase();
 			if (!nextMode) {
-				ctx.ui.notify(`Working indicator: ${describeMode(mode)} | Phase: ${currentPhase}`, "info");
+				ctx.ui.notify(
+					`Working indicator: ${describeMode(mode)} | Phase: ${currentPhase}`,
+					"info",
+				);
 				return;
 			}
 
@@ -296,7 +334,10 @@ export default function (pi: ExtensionAPI) {
 				nextMode !== "auto" &&
 				nextMode !== "reset"
 			) {
-				ctx.ui.notify("Usage: /working-indicator [dot|pulse|none|spinner|auto|reset]", "error");
+				ctx.ui.notify(
+					"Usage: /working-indicator [dot|pulse|none|spinner|auto|reset]",
+					"error",
+				);
 				return;
 			}
 

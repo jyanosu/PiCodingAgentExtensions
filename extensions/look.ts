@@ -45,13 +45,16 @@ function getClipboardImageBase64(): Promise<string | null> {
         const out = stdout.trim();
         if (err || !out) return resolve(null);
         resolve(out);
-      }
+      },
     );
   });
 }
 
 /** Find the newest pi-clipboard-* image in tmpdir, or null. */
-async function findLatestClipboardFile(): Promise<{ path: string; mimeType: string } | null> {
+async function findLatestClipboardFile(): Promise<{
+  path: string;
+  mimeType: string;
+} | null> {
   try {
     const dir = tmpdir();
     const now = Date.now();
@@ -67,7 +70,9 @@ async function findLatestClipboardFile(): Promise<{ path: string; mimeType: stri
         if (!best || s.mtimeMs > best.mtimeMs) {
           best = { path: join(dir, name), mtimeMs: s.mtimeMs, ext };
         }
-      } catch {}
+      } catch {
+        // file vanished or unreadable — skip this candidate
+      }
     }
 
     if (!best) return null;
@@ -79,7 +84,8 @@ async function findLatestClipboardFile(): Promise<{ path: string; mimeType: stri
 
 export default function (pi: ExtensionAPI) {
   pi.registerCommand("look", {
-    description: "Send clipboard screenshot or image file to the model. /look [prompt] or /look <image-path> [prompt]",
+    description:
+      "Send clipboard screenshot or image file to the model. /look [prompt] or /look <image-path> [prompt]",
     handler: async (args, ctx) => {
       const parts = args.trim().split(/\s+/).filter(Boolean);
 
@@ -87,17 +93,20 @@ export default function (pi: ExtensionAPI) {
       let mimeType: string | null = null;
       let promptParts = parts;
 
-      // 1. Explicit image path as first arg
+      // 1. Explicit image path as first arg (either separator: Windows or POSIX)
       if (parts.length > 0) {
         const first = parts[0];
         const ext = extname(first).toLowerCase();
-        if (ext in MIME_BY_EXT && first.includes("\\")) {
+        const looksLikePath = first.includes("\\") || first.includes("/");
+        if (ext in MIME_BY_EXT && looksLikePath) {
           try {
             await stat(first);
             data = (await readFile(first)).toString("base64");
             mimeType = MIME_BY_EXT[ext]!;
             promptParts = parts.slice(1);
-          } catch {}
+          } catch {
+            // path doesn't exist / unreadable — fall through to clipboard lookup
+          }
         }
       }
 
@@ -120,13 +129,17 @@ export default function (pi: ExtensionAPI) {
       }
 
       if (!data || !mimeType) {
-        ctx.ui.notify("No image found — screenshot with Win+Shift+S, or pass a path: /look C:\\path\\img.png", "error");
+        ctx.ui.notify(
+          "No image found — screenshot with Win+Shift+S, or pass a path: /look C:\\path\\img.png",
+          "error",
+        );
         return;
       }
 
-      const prompt = promptParts.length > 0
-        ? promptParts.join(" ")
-        : "Describe and analyze this image.";
+      const prompt =
+        promptParts.length > 0
+          ? promptParts.join(" ")
+          : "Describe and analyze this image.";
 
       pi.sendUserMessage([
         { type: "image", data, mimeType },

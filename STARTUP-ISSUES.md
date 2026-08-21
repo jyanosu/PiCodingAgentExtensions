@@ -1,5 +1,134 @@
 # Startup Issues — PiCodingAgentExtensions
 
+## Startup pass 2026-08-20 (read-only, 2nd — branch `guard-updates` == `main` @ 2a10399)
+
+Typecheck passes (`npm run typecheck`, strict, exit 0). Both test suites pass:
+`node tests/voice-input.test.mjs` (8 groups), `node tests/danger-guard.test.mjs`
+(all patterns). Working tree clean. All 11 README extensions present.
+
+Since the 1st pass of this date, PR #8 (voice-toggle) landed: Alt+Q early-stop,
+`busy` guard, `MIN_RECORD_MS` discard, Alt+Q trim parity, trailing-period strip
+in `voiceTextToInput`, `recordAudio` now returns `{promise, stop}` (idempotent
+stop), plus a prettier formatting pass. **Fixed since 1st pass:** voice-input
+README stale duration docs (now "default max 20s / capped at 60s", matches code).
+
+### Still open from 1st pass (re-verified against current code)
+
+1. **voice-input/index.ts — Alt+Q error path leaks temp WAV** (unchanged).
+   `const filesToDelete = [tempFile]` is declared inside the `try` in the
+   Alt+Q handler; the `catch` only notifies, never unlinks. If `trimAudio` or
+   `transcribe` throws, `voice-*.wav` (+ trimmed file when trim succeeded)
+   leak. The `/voice` handler hoists the array and cleans up in `catch` —
+   the Alt+Q handler was missed again.
+2. **obsidian-logger/index.ts — `readmeChecked` not reset on `session_start`**
+   (unchanged). Second project in same process never gets its README.md.
+3. **auto-continue.ts** — dead `const STATE_KEY = "auto-continue:enabled"`
+   (actual customType is literal `"auto-continue-state"`).
+4. **working-indicator.ts** — `process.env.HOME || "/root"`: Windows `HOME`
+   usually unset → config lands at `/root/.pi/agent`.
+5. **look.ts** — explicit-path arg requires backslash (`first.includes("\\")`);
+   Linux `/tmp/img.png` falls through to clipboard → temp-file fallback.
+6. **compaction-model.ts** — `SUMMARY_PROMPT.replace("\n1. The main goals", …)`
+   fragile string hack for previous-summary injection; models.json fallback
+   branch hardcodes `maxTokens: 8192`, ignoring `COMPACTION_MODEL_MAX_TOKENS`.
+7. **highlight-footer.ts** — `gitLines` spawns git with no timeout; non-stale
+   errors re-thrown from async `fetchGitData` → unhandled rejection (called
+   from `setInterval`).
+8. **voice-input/index.ts** — `detectDefaultMic()` uses `execSync` (blocks
+   event loop at `session_start` when `MIC_DEVICE` unset); hardcoded fallback
+   whisper URL `https://whisper.local.johnyan.net` used silently when no
+   `.env`/env var (audio sent there with no notice).
+9. **response-latency.ts** — stale-ctx `setTimeout` (2s) — intentionally
+   unfixed per earlier decision.
+10. **docs/tmp-log-toggle/plan.md line 103** — still claims `.env` "is tracked";
+    it is gitignored.
+11. **Live install drift** — `/root/.pi/agent/extensions/`: all 5 files present
+    there DIFFER from repo (dated Jul 28 / Aug 12), and auto-continue,
+    clipboard-cleanup, danger-guard, look, obsidian-logger/, voice-input/ are
+    missing entirely. Repo is source of truth; live needs re-copy.
+
+### New findings (this pass)
+
+1. **package.json lacks `"type": "module"`** — tests import `.ts` files
+   directly via node, which prints a `MODULE_TYPELESS_PACKAGE_JSON` warning
+   ("Reparsing as ES module") on every run. Extensions are ESM
+   (`import.meta.url`); adding `"type": "module"` would silence it.
+2. **voice-input — partial trimmed WAV can leak** (both handlers): `trimAudio`
+   is awaited *before* `filesToDelete.push(trimmedFile)`. If ffmpeg trim fails
+   after writing a partial `voice-trimmed-*.wav`, that file is never unlinked
+   (in `/voice` the catch cleans up the list, which lacks it; in Alt+Q
+   nothing is cleaned up — see still-open #1).
+3. **`parseMaxDuration` quirk** — `/voice 1` and `/voice 2` (`n <= 2`) silently
+   fall back to the 20s default instead of honoring the requested value.
+    Undocumented.
+4. **danger-guard rm pattern misses long-flag form** —
+   `rm --recursive file` / `rm --force file` do not match
+   `/\brm\s+(?:-\w+\s+)*-\w*[rf]\w*(?:\s|$)/i` (only single-dash `-r`/`-f`
+   combos). GNU rm accepts the long forms.
+
+### Security review
+
+- No secrets in repo (`.env` gitignored; only `.env.example` tracked).
+- look.ts PowerShell script is a fixed string — no user input in the command,
+  no injection path.
+- danger-guard: `sudo` pattern matches *all* sudo (broad by design, tests
+  assert it); `git push` force pattern correctly catches `-f`, `--force`,
+  `--force-with-lease` and multi-command lines. Long-flag rm gap above is the
+  one real miss.
+- voice-input: unconfigured default sends audio to a personal hardcoded URL —
+  privacy-relevant, already flagged as smell #8.
+
+### Tech stack (unchanged)
+
+TypeScript strict ESM (es2022, bundler resolution, `tsc --noEmit`), Pi
+Extension API (`@earendil-works/pi-coding-agent` ^0.84.2 + `pi-ai`), node:
+builtins only, no framework. Tests: plain `node` + `assert` in `.mjs` files
+importing `.ts` directly (node type-stripping). Config via `.env` next to
+extension or process env.
+
+### Fixed (2026-08-20, same day, uncommitted on `guard-updates`)
+
+All of the above addressed except the intentionally-unfixed items:
+
+1. voice-input Alt+Q temp-WAV leak — `filesToDelete` hoisted outside `try`,
+   `catch` now unlinks (both handlers).
+2. obsidian-logger `readmeChecked` reset on `session_start`.
+3. auto-continue dead `STATE_KEY` removed.
+4. working-indicator `homedir()` instead of `HOME || "/root"`.
+5. look.ts path check accepts `/` and `\\` (POSIX paths now work).
+6. compaction-model: `{{PREVIOUS_SUMMARY}}` placeholder replaces the
+   `SUMMARY_PROMPT.replace("\n1. The main goals", …)` hack; `parseMaxTokens()`
+   honors `COMPACTION_MODEL_MAX_TOKENS` in both config branches.
+7. highlight-footer: `gitLines` has a 5s timeout (kills hung git); non-stale
+   errors logged instead of re-thrown (no more unhandled rejections).
+8. voice-input: `detectDefaultMic` now async `execFile` (no event-loop block);
+   `getConfig` async + awaited at `session_start`.
+9. response-latency: stale-ctx `setTimeout` callback wrapped in try/catch.
+10. docs/tmp-log-toggle/plan.md `.env` "tracked" wording corrected.
+11. Live install re-copied: all 10 files + voice-input/ + obsidian-logger/
+    synced to `/root/.pi/agent/extensions/` (verified byte-identical).
+12. package.json `"type": "module"` (kills the typeless-package warning).
+13. Partial trimmed-WAV leak: trimmed file pushed to `filesToDelete` BEFORE
+    `trimAudio` (both handlers).
+14. `parseMaxDuration` honors `n >= 1` (`/voice 1`/`/voice 2` no longer
+    silently become 20s); tests updated.
+15. danger-guard rm pattern now catches `rm --recursive` / `rm --force`;
+    `rm file.txt` still does NOT match (verified in tests, 3 new cases).
+
+Not changed (deliberate): hardcoded fallback whisper URL (user's own server),
+voice-input Alt+Q fixed 20s max (by design).
+
+Extra hardening found while validating: `recordAudio.settle()` now skips
+`proc.kill()` when the spawn never produced a pid (ffmpeg-missing case) —
+kill on a never-spawned child was the one suspicious path in the test env.
+
+**Test-env note:** intermittent multi-second process freezes observed in this
+container/tmux (pure-JS test groups stalling 30-55s, thread state S, no CPU
+throttling) — environmental, not code. Both suites pass cleanly when the env
+cooperates: voice-input 8/8 groups (×3 consecutive runs), danger-guard 53+
+config tests, `tsc --noEmit` exit 0. No new temp-file orphans after the
+cleanup fixes.
+
 ## Startup pass 2026-08-20 (read-only, fresh)
 
 Typecheck passes (`npm run typecheck`, strict, exit 0). Working tree clean on

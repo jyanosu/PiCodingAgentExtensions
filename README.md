@@ -125,7 +125,7 @@ OBSIDIAN_LOGGER_ENABLED=true   # optional, default true
 
 ### danger-guard
 
-Intercepts `bash` tool calls and asks for confirmation before destructive commands. Without a UI (non-interactive mode) matching commands are blocked outright. On by default every session — state is in-memory, never persisted.
+Intercepts `bash` tool calls and asks for confirmation before destructive commands. Also asks when a command navigates (`cd`/`pushd`) outside the working-dir tree — moving into subdirectories is fine, leaving the tree (parents, `/tmp`, home, …) prompts. Without a UI (non-interactive mode) matching commands are blocked outright. On by default every session — state is in-memory, never persisted.
 
 Commands:
 
@@ -139,6 +139,7 @@ Environment variables:
 ```bash
 DANGER_GUARD_PATTERNS='["\\bgit\\s+push\\b"]'  # JSON array of regex strings, replaces defaults
 DANGER_GUARD_TIMEOUT_MS=120000                  # confirm timeout (default 120s; timeout = block)
+DANGER_GUARD_NAV=off                            # optional: disable the cd-outside-working-dir check (default on)
 ```
 
 ### look

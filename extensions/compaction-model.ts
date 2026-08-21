@@ -18,9 +18,14 @@ import { join } from "node:path";
 import { uuidv7 } from "@earendil-works/pi-ai";
 import { complete } from "@earendil-works/pi-ai/compat";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { convertToLlm, serializeConversation } from "@earendil-works/pi-coding-agent";
+import {
+  convertToLlm,
+  serializeConversation,
+} from "@earendil-works/pi-coding-agent";
 
-const SUMMARY_PROMPT = `You are a conversation summarizer. Create a comprehensive summary of this conversation that captures:
+// {{PREVIOUS_SUMMARY}} is replaced with prior-summary context (or "") — placeholder
+// keeps prompt assembly deterministic instead of string-matching prompt text.
+const SUMMARY_PROMPT = `You are a conversation summarizer.{{PREVIOUS_SUMMARY}} Create a comprehensive summary of this conversation that captures:
 
 1. The main goals and objectives discussed
 2. Key decisions made and their rationale
@@ -78,6 +83,12 @@ interface CompactionConfig {
   maxTokens: number;
 }
 
+/** Max summary tokens from env (default 8192). */
+function parseMaxTokens(): number {
+  const n = parseInt(process.env.COMPACTION_MODEL_MAX_TOKENS || "8192", 10);
+  return isNaN(n) || n <= 0 ? 8192 : n;
+}
+
 function loadConfig(): CompactionConfig {
   // Read from env vars first, then fall back to models.json
   const baseUrl = process.env.COMPACTION_MODEL_BASE_URL;
@@ -87,13 +98,14 @@ function loadConfig(): CompactionConfig {
       modelId: process.env.COMPACTION_MODEL_ID || "Qwen3.5-8B",
       baseUrl,
       apiKey: process.env.COMPACTION_MODEL_API_KEY || undefined,
-      maxTokens: parseInt(process.env.COMPACTION_MODEL_MAX_TOKENS || "8192", 10),
+      maxTokens: parseMaxTokens(),
     };
   }
 
   // Fall back to reading models.json for the litellm endpoint
   try {
-    const configDir = process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
+    const configDir =
+      process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
     const modelsPath = join(configDir, "models.json");
     const models = JSON.parse(readFileSync(modelsPath, "utf8")) as {
       providers?: Record<string, { baseUrl?: string; apiKey?: string }>;
@@ -108,7 +120,7 @@ function loadConfig(): CompactionConfig {
         modelId: process.env.COMPACTION_MODEL_ID || "Qwen3.5-8B",
         baseUrl: litellmProvider.baseUrl,
         apiKey: litellmProvider.apiKey || undefined,
-        maxTokens: 8192,
+        maxTokens: parseMaxTokens(),
       };
     }
   } catch {
@@ -171,16 +183,18 @@ export default async function (pi: ExtensionAPI) {
     if (!auth.ok) throw new Error(`Auth failed: ${auth.error}`);
 
     const allMessages = [...messagesToSummarize, ...(turnPrefixMessages || [])];
-    const conversationText = serializeConversation(convertToLlm(allMessages as any));
+    const conversationText = serializeConversation(
+      convertToLlm(allMessages as any),
+    );
 
     const previousContext = previousSummary
       ? `\n\nPrevious session summary for context:\n${previousSummary}`
       : "";
 
-    const prompt = SUMMARY_PROMPT.replace("{{CONVERSATION}}", conversationText).replace(
-      "\n1. The main goals",
-      `${previousContext}\n1. The main goals`,
-    );
+    const prompt = SUMMARY_PROMPT.replace(
+      "{{CONVERSATION}}",
+      conversationText,
+    ).replace("{{PREVIOUS_SUMMARY}}", previousContext);
 
     const summaryMessages = [
       {
@@ -190,22 +204,33 @@ export default async function (pi: ExtensionAPI) {
       },
     ];
 
-    return await complete(model, { messages: summaryMessages }, {
-      apiKey: auth.apiKey || undefined,
-      headers: auth.headers,
-      env: auth.env,
-      maxTokens: config.maxTokens,
-      signal,
-      cacheRetention: "none",
-      sessionId: uuidv7(),
-    });
+    return await complete(
+      model,
+      { messages: summaryMessages },
+      {
+        apiKey: auth.apiKey || undefined,
+        headers: auth.headers,
+        env: auth.env,
+        maxTokens: config.maxTokens,
+        signal,
+        cacheRetention: "none",
+        sessionId: uuidv7(),
+      },
+    );
   };
 
   pi.on("session_before_compact", async (event, ctx) => {
     const { preparation, signal } = event;
-    const { messagesToSummarize, turnPrefixMessages, tokensBefore, firstKeptEntryId, previousSummary } = preparation;
+    const {
+      messagesToSummarize,
+      turnPrefixMessages,
+      tokensBefore,
+      firstKeptEntryId,
+      previousSummary,
+    } = preparation;
 
-    const allCount = messagesToSummarize.length + (turnPrefixMessages?.length || 0);
+    const allCount =
+      messagesToSummarize.length + (turnPrefixMessages?.length || 0);
     ctx.ui.notify(
       `Compacting ${allCount} msgs (${tokensBefore.toLocaleString()} tok) with ${config.modelId}...`,
       "info",
@@ -227,7 +252,10 @@ export default async function (pi: ExtensionAPI) {
 
       if (!summary.trim()) {
         if (!signal?.aborted) {
-          ctx.ui.notify("Summary was empty, using default compaction", "warning");
+          ctx.ui.notify(
+            "Summary was empty, using default compaction",
+            "warning",
+          );
         }
         return;
       }
@@ -288,7 +316,8 @@ ${conversationText}
 </conversation>`;
 
       const model = ctx.modelRegistry.find(config.provider, config.modelId);
-      if (!model) throw new Error(`Model ${config.provider}/${config.modelId} not found`);
+      if (!model)
+        throw new Error(`Model ${config.provider}/${config.modelId} not found`);
 
       const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
       if (!auth.ok) throw new Error(`Auth failed: ${auth.error}`);
@@ -301,15 +330,19 @@ ${conversationText}
         },
       ];
 
-      const response = await complete(model, { messages: summaryMessages }, {
-        apiKey: auth.apiKey || undefined,
-        headers: auth.headers,
-        env: auth.env,
-        maxTokens: config.maxTokens,
-        signal,
-        cacheRetention: "none",
-        sessionId: uuidv7(),
-      });
+      const response = await complete(
+        model,
+        { messages: summaryMessages },
+        {
+          apiKey: auth.apiKey || undefined,
+          headers: auth.headers,
+          env: auth.env,
+          maxTokens: config.maxTokens,
+          signal,
+          cacheRetention: "none",
+          sessionId: uuidv7(),
+        },
+      );
 
       const summary = response.content
         .filter((c): c is { type: "text"; text: string } => c.type === "text")
