@@ -10,6 +10,9 @@
  * Folder structure: {root}/Projects/{projectName}/{sessionId}/MM-DD-YYYY.md
  * where {root} is the Obsidian vault by default, or the OS temp directory
  * (os.tmpdir()/pi-obsidian-logger) when switched via /obsidian-logger tmp.
+ * Long sessions roll over to MM-DD-YYYY-2.md, -3.md, ... once a note
+ * approaches MAX_NOTE_BYTES — Obsidian's renderer drops ![[embeds]] in
+ * very large notes (~100KB+), so each note stays well under that.
  *
  * Assistant reasoning (thinking blocks) is excluded by default; enable it
  * per session with /obsidian-logger thinking.
@@ -23,7 +26,14 @@ import type {
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { parseSkillBlock } from "@earendil-works/pi-coding-agent";
-import { appendFile, mkdir, open, readFile, writeFile } from "node:fs/promises";
+import {
+  appendFile,
+  mkdir,
+  open,
+  readFile,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -278,6 +288,35 @@ async function buildFrontmatter(
 /** In-flight frontmatter creation per file path (serializes concurrent first writes) */
 const fileCreations = new Map<string, Promise<void>>();
 
+/**
+ * Max bytes per note before rolling over to the next numbered file.
+ * Obsidian's editor stops processing markdown (incl. ![[embeds]]) once a
+ * note gets very large (~100KB+); 50KB keeps a wide safety margin.
+ */
+const MAX_NOTE_BYTES = 50_000;
+
+/**
+ * Pick today's note file: the plain daily file while it fits, else the
+ * next rollover (MM-DD-YYYY-2.md, -3.md, ...). A missing file always
+ * wins; an existing file wins if the incoming entry still fits.
+ */
+async function resolveDailyFilePath(
+  folderPath: string,
+  dateStr: string,
+  incomingBytes: number,
+): Promise<string> {
+  for (let i = 1; ; i++) {
+    const name = i === 1 ? `${dateStr}.md` : `${dateStr}-${i}.md`;
+    const p = join(folderPath, name);
+    try {
+      const st = await stat(p);
+      if (st.size + incomingBytes <= MAX_NOTE_BYTES) return p;
+    } catch {
+      return p; // does not exist yet
+    }
+  }
+}
+
 /** Append content to the daily MD file */
 export async function appendToDailyFile(
   ctx: ExtensionContext,
@@ -292,9 +331,12 @@ export async function appendToDailyFile(
   if (!text.trim()) return;
 
   const dateStr = formatDate();
-  const fileName = `${dateStr}.md`;
   const folderPath = join(vaultPath, "Projects", projectName, sessionId);
-  const filePath = join(folderPath, fileName);
+  const filePath = await resolveDailyFilePath(
+    folderPath,
+    dateStr,
+    Buffer.byteLength(text, "utf-8"),
+  );
 
   // Build markdown entry
   const roleLabel = role === "user" ? "## 👤 Prompt" : "## 🤖 Response";
@@ -307,6 +349,8 @@ export async function appendToDailyFile(
   if (images.length > 0) {
     const imgDir = join(folderPath, "images");
     await mkdir(imgDir, { recursive: true });
+    // (images live in one shared folder per session; rollover notes
+    // embed them the same way — names are timestamped, never collide)
     const d = new Date();
     const pad2 = (n: number) => String(n).padStart(2, "0");
     const stamp = `${d.getFullYear()}${pad2(d.getMonth() + 1)}${pad2(d.getDate())}-${pad2(d.getHours())}${pad2(d.getMinutes())}${pad2(d.getSeconds())}`;

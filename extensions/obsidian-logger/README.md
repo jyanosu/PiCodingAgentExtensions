@@ -75,7 +75,7 @@ reasoning for the current session:
 ## Folder Structure
 
 ```
-{root}/Projects/{projectName}/{sessionId}/MM-DD-YYYY.md
+{root}/Projects/{projectName}/{sessionId}/MM-DD-YYYY.md   (rolls over to -2, -3, ... past ~50KB)
 {root}/Projects/{projectName}/{sessionId}/images/img-YYYYMMDD-HHMMSS-N.png
 ```
 
@@ -85,7 +85,9 @@ Example: `C:/Vault/Projects/eVETAssist/abc123-def456/06-15-2025.md`
 
 - **Project name**: Last directory component of your working directory
 - **Session ID**: Unique Pi session UUID
-- **Date file**: MM-DD-YYYY format, appends if file exists
+- **Date file**: MM-DD-YYYY format, appends if file exists; rolls over to
+  `MM-DD-YYYY-2.md`, `-3.md`, ... once a note approaches 50KB (Obsidian's
+  renderer drops `![[embeds]]` in very large notes, ~100KB+)
 - **images/**: attached images from user messages (created only when needed)
 
 ### Image Embedding
