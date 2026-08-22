@@ -68,12 +68,12 @@ Commands:
 
 ### response-latency
 
-No configuration needed. Shows latency in status bar with phases:
+No configuration needed. Shows latency in status bar with phases (thresholds scaled for local AI — 60s is still normal):
 
-- `< 2s` — ⚡ fast (green)
-- `2-5s` — ◉ normal (yellow)
-- `5-10s` — ◈ slow (orange)
-- `> 10s` — ✖ stalling (red)
+- `< 30s` — ⚡ fast (green)
+- `30-60s` — ◉ normal (yellow)
+- `60-120s` — ◈ slow (orange)
+- `> 120s` — ✖ stalling (red)
 
 ### voice-input
 

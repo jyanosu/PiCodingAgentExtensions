@@ -1,11 +1,13 @@
 /**
  * Response Latency Indicator
  *
- * Shows time elapsed since user sent message. Color/icon changes with speed:
- *   < 2s    green  ⚡ fast
- *   2-5s    yellow ◉ normal
- *   5-10s   orange ◈ slow
- *   > 10s   red    ✖ timeout-risk
+ * Shows time elapsed since user sent message. Color/icon changes with speed.
+ * Thresholds are scaled for local AI inference (a 60s completion is still
+ * normal; stalling starts at 120s):
+ *   < 30s    green  ⚡ fast
+ *   30-60s   yellow ◉ normal
+ *   60-120s  orange ◈ slow
+ *   > 120s   red    ✖ stalling
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -16,17 +18,20 @@ interface LatencyPhase {
   label: string;
 }
 
-function getPhase(ms: number): LatencyPhase {
-  if (ms < 2000) return { icon: "⚡", color: "success", label: "fast" };
-  if (ms < 5000) return { icon: "◉", color: "warning", label: "normal" };
-  if (ms < 10_000) return { icon: "◈", color: "warning", label: "slow" };
+export function getPhase(ms: number): LatencyPhase {
+  if (ms < 30_000) return { icon: "⚡", color: "success", label: "fast" };
+  if (ms < 60_000) return { icon: "◉", color: "warning", label: "normal" };
+  if (ms < 120_000) return { icon: "◈", color: "warning", label: "slow" };
   return { icon: "✖", color: "error", label: "stalling" };
 }
 
-function formatTime(ms: number): string {
+export function formatTime(ms: number): string {
   if (ms < 1000) return `${ms}ms`;
-  const sec = (ms / 1000).toFixed(1);
-  return `${sec}s`;
+  const sec = ms / 1000;
+  if (sec < 60) return `${sec.toFixed(1)}s`;
+  const m = Math.floor(sec / 60);
+  const s = Math.round(sec % 60);
+  return `${m}m${String(s).padStart(2, "0")}s`;
 }
 
 export default function (pi: ExtensionAPI) {
