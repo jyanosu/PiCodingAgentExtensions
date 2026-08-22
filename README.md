@@ -77,7 +77,7 @@ No configuration needed. Shows two timings in the status bar: **response latency
   - `> 120s` — ✖ stalling (red)
 - **◷ whole-turn timer** — total time for the current turn (prompt through completion, including tool execution and streaming). A plain stopwatch without phase coloring, since a long tool-heavy turn is normal.
 
-Both values freeze with ✓ when the turn ends, then clear after a couple of seconds.
+Both values freeze with ✓ when the turn ends and stay in the status bar until the next prompt is sent.
 
 ### voice-input
 

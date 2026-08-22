@@ -14,6 +14,9 @@
  *
  * Example: `⚡ 1.2s ✓ | ◷ 2m05s`
  *
+ * The frozen values stay in the status bar until the next prompt is sent
+ * (a new agent_start replaces them with live timing).
+ *
  * Response-latency phases are scaled for local AI inference (a 60s response
  * is still normal; stalling starts at 120s):
  *   < 30s    green  ⚡ fast
@@ -149,17 +152,8 @@ export default function (pi: ExtensionAPI) {
     waitStart = 0; // a call still pending at turn end never got a response
     clearTimer();
     try {
+      // Frozen values stay visible until the next prompt (agent_start resets)
       render(ctx);
-      setTimeout(() => {
-        if (turnStart || !lastTurn) return; // a new turn took over
-        lastTurn = 0;
-        lastTtft = 0;
-        try {
-          ctx.ui.setStatus("response-latency", undefined);
-        } catch {
-          // stale ctx — nothing to clear
-        }
-      }, 2000);
     } catch {
       // stale ctx — nothing to show
     }
