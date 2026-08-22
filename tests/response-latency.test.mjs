@@ -30,4 +30,60 @@ assert.strictEqual(formatTime(125_000), "2m05s");
 assert.strictEqual(formatTime(300_000), "5m00s");
 ok("formatTime: ms / x.xs / m:ss");
 
+// --- State machine: per-model-call wait, not whole-turn ---
+import latencyExt from "../extensions/response-latency.ts";
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+{
+  const handlers = {};
+  const pi = { on: (ev, h) => (handlers[ev] = h) };
+  latencyExt(pi);
+  const statuses = [];
+  const ctx = {
+    ui: {
+      theme: { fg: (_c, s) => s },
+      setStatus: (_k, v) => statuses.push(v),
+    },
+  };
+
+  await handlers.agent_start({}, ctx);
+  assert.ok(statuses.length >= 1, "counting starts on agent_start");
+  // Combined display: response wait | whole-turn stopwatch
+  assert.match(statuses[0], /^⚡ 0ms \| ◷ 0ms$/, `first tick: ${statuses[0]}`);
+  await sleep(250);
+  const counting = statuses.length;
+  assert.ok(counting > 1, "timer keeps ticking while waiting");
+
+  // Response arrives → response part freezes with ✓, turn part keeps running
+  await handlers.message_start({ message: { role: "assistant" } }, ctx);
+  await sleep(50);
+  const frozen = statuses[statuses.length - 1];
+  assert.match(
+    frozen,
+    /⚡ \d.* ✓ \| ◷ /,
+    `response frozen, turn live: ${frozen}`,
+  );
+
+  // Tools finish → next model call counts again (no ✓ on response part)
+  await handlers.tool_execution_end({}, ctx);
+  await sleep(50);
+  const restarted = statuses[statuses.length - 1];
+  assert.ok(
+    !restarted.split("|")[0].includes("✓"),
+    `counting resumes after tools: ${restarted}`,
+  );
+
+  // Turn ends → both parts freeze with ✓, no more ticks
+  await handlers.agent_end({}, ctx);
+  const ended = statuses[statuses.length - 1];
+  assert.match(ended, /◷ .* ✓$/, `frozen turn value: ${ended}`);
+  const afterEnd = statuses.length;
+  await sleep(300);
+  assert.strictEqual(statuses.length, afterEnd, "no ticks after agent_end");
+
+  handlers.session_shutdown();
+}
+ok("state machine: per-call wait + whole-turn stopwatch, freeze at turn end");
+
 console.log("\nAll response-latency tests passed");

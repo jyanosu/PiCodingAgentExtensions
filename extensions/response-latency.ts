@@ -1,9 +1,21 @@
 /**
  * Response Latency Indicator
  *
- * Shows time elapsed since user sent message. Color/icon changes with speed.
- * Thresholds are scaled for local AI inference (a 60s completion is still
- * normal; stalling starts at 120s):
+ * Shows two timings in the status bar, separated by " | ":
+ *
+ *   ⚡ response latency — the wait from when a model request is dispatched
+ *   (prompt sent, or tool results handed back) until the response starts
+ *   coming back (first assistant message). Each model call in a turn is
+ *   measured separately; the value freezes with a ✓ when it arrives.
+ *
+ *   ◷ whole-turn timer — total time for the current turn (prompt through
+ *   agent_end, including tool execution and streaming). A plain stopwatch:
+ *   no phase coloring, since a long tool-heavy turn is normal.
+ *
+ * Example: `⚡ 1.2s ✓ | ◷ 2m05s`
+ *
+ * Response-latency phases are scaled for local AI inference (a 60s response
+ * is still normal; stalling starts at 120s):
  *   < 30s    green  ⚡ fast
  *   30-60s   yellow ◉ normal
  *   60-120s  orange ◈ slow
@@ -35,7 +47,10 @@ export function formatTime(ms: number): string {
 }
 
 export default function (pi: ExtensionAPI) {
-  let messageStart = 0;
+  let turnStart = 0; // when the current turn began (whole-turn stopwatch)
+  let waitStart = 0; // when the current model request was dispatched
+  let lastTtft = 0; // last completed response latency (shown frozen with ✓)
+  let lastTurn = 0; // completed turn duration (shown frozen for ~2s)
   let updateTimer: ReturnType<typeof setInterval> | null = null;
 
   const clearTimer = () => {
@@ -45,63 +60,116 @@ export default function (pi: ExtensionAPI) {
     }
   };
 
-  const startTracking = (ctx: any) => {
-    messageStart = Date.now();
-    clearTimer();
-
-    const tick = () => {
-      if (!messageStart) return;
-      const elapsed = Date.now() - messageStart;
-      const phase = getPhase(elapsed);
-
-      const status = ctx.ui.theme.fg(
-        phase.color,
-        `${phase.icon} ${formatTime(elapsed)} (${phase.label})`,
+  /** Render the combined status; undefined (clears) when nothing is active. */
+  const render = (ctx: any) => {
+    const parts: string[] = [];
+    if (waitStart > 0) {
+      const e = Date.now() - waitStart;
+      const p = getPhase(e);
+      parts.push(ctx.ui.theme.fg(p.color, `${p.icon} ${formatTime(e)}`));
+    } else if (lastTtft > 0) {
+      const p = getPhase(lastTtft);
+      parts.push(
+        ctx.ui.theme.fg(p.color, `${p.icon} ${formatTime(lastTtft)} ✓`),
       );
-      ctx.ui.setStatus("response-latency", status);
-    };
+    }
+    if (turnStart > 0) {
+      parts.push(
+        ctx.ui.theme.fg("dim", `◷ ${formatTime(Date.now() - turnStart)}`),
+      );
+    } else if (lastTurn > 0) {
+      parts.push(ctx.ui.theme.fg("dim", `◷ ${formatTime(lastTurn)} ✓`));
+    }
+    ctx.ui.setStatus(
+      "response-latency",
+      parts.length > 0
+        ? parts.join(ctx.ui.theme.fg("muted", " | "))
+        : undefined,
+    );
+  };
 
+  const startTimer = (ctx: any) => {
+    clearTimer();
+    const tick = () => {
+      if (!turnStart) return;
+      try {
+        render(ctx);
+      } catch {
+        // stale ctx (session reloaded mid-turn) — stop, new session owns status
+        turnStart = 0;
+        waitStart = 0;
+        lastTtft = 0;
+        lastTurn = 0;
+        clearTimer();
+      }
+    };
     tick();
     updateTimer = setInterval(tick, 200);
   };
 
-  const stopTracking = (ctx: any) => {
-    if (messageStart) {
-      const elapsed = Date.now() - messageStart;
-      const phase = getPhase(elapsed);
-      const status = ctx.ui.theme.fg(
-        phase.color,
-        `${phase.icon} ${formatTime(elapsed)} ✓`,
-      );
-      ctx.ui.setStatus("response-latency", status);
-    }
-    messageStart = 0;
-    clearTimer();
+  // Turn begins → start the stopwatch and time the first model call
+  pi.on("agent_start", async (_event, ctx) => {
+    lastTtft = 0;
+    lastTurn = 0;
+    turnStart = Date.now();
+    waitStart = Date.now();
+    startTimer(ctx);
+  });
 
-    // Clear after brief delay so user sees final time.
-    // The ctx may be stale by then (session reloaded) — a stale ctx.ui.setStatus
-    // throws, so swallow it: the status bar of the new session owns its own state.
-    setTimeout(() => {
-      if (!messageStart) {
+  // Response started coming back → freeze the response latency for this call
+  pi.on("message_start", async (event, ctx) => {
+    if (event.message.role !== "assistant" || !waitStart) return;
+    lastTtft = Date.now() - waitStart;
+    waitStart = 0;
+    try {
+      render(ctx);
+    } catch {
+      // stale ctx — the tick will stop itself
+    }
+  });
+
+  // Tools finished → the agent dispatches the next model call with results.
+  // Parallel tools: the last end event wins ≈ when the call goes out.
+  pi.on("tool_execution_end", async (_event, ctx) => {
+    if (turnStart && !waitStart) {
+      waitStart = Date.now();
+      try {
+        render(ctx);
+      } catch {
+        // stale ctx — the tick will stop itself
+      }
+    }
+  });
+
+  // Turn over → freeze both values, show for a couple of seconds, then clear
+  pi.on("agent_end", async (_event, ctx) => {
+    if (!turnStart) return;
+    lastTurn = Date.now() - turnStart;
+    turnStart = 0;
+    waitStart = 0; // a call still pending at turn end never got a response
+    clearTimer();
+    try {
+      render(ctx);
+      setTimeout(() => {
+        if (turnStart || !lastTurn) return; // a new turn took over
+        lastTurn = 0;
+        lastTtft = 0;
         try {
           ctx.ui.setStatus("response-latency", undefined);
         } catch {
           // stale ctx — nothing to clear
         }
-      }
-    }, 2000);
-  };
-
-  pi.on("agent_start", async (_event, ctx) => {
-    startTracking(ctx);
-  });
-
-  pi.on("agent_end", async (_event, ctx) => {
-    stopTracking(ctx);
+      }, 2000);
+    } catch {
+      // stale ctx — nothing to show
+    }
   });
 
   pi.on("session_shutdown", () => {
     clearTimer();
-    messageStart = 0;
+    turnStart = 0;
+    waitStart = 0;
+    lastTtft = 0;
+    lastTurn = 0;
   });
 }

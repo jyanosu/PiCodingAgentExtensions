@@ -68,12 +68,16 @@ Commands:
 
 ### response-latency
 
-No configuration needed. Shows latency in status bar with phases (thresholds scaled for local AI — 60s is still normal):
+No configuration needed. Shows two timings in the status bar: **response latency** (⚡) and the **whole-turn timer** (◷), e.g. `⚡ 1.2s ✓ | ◷ 2m05s`.
 
-- `< 30s` — ⚡ fast (green)
-- `30-60s` — ◉ normal (yellow)
-- `60-120s` — ◈ slow (orange)
-- `> 120s` — ✖ stalling (red)
+- **⚡ response latency** — the wait from when a model request is dispatched (prompt sent, or tool results handed back) until the response starts coming back. Each model call in a turn is measured separately, and the value freezes with a ✓ when the response arrives. Phases scaled for local AI (60s is still normal):
+  - `< 30s` — ⚡ fast (green)
+  - `30-60s` — ◉ normal (yellow)
+  - `60-120s` — ◈ slow (orange)
+  - `> 120s` — ✖ stalling (red)
+- **◷ whole-turn timer** — total time for the current turn (prompt through completion, including tool execution and streaming). A plain stopwatch without phase coloring, since a long tool-heavy turn is normal.
+
+Both values freeze with ✓ when the turn ends, then clear after a couple of seconds.
 
 ### voice-input
 
