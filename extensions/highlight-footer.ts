@@ -1,5 +1,9 @@
 import { spawn } from "child_process";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+// pi-tui's own width functions — the TUI width checker uses these exact
+// algorithms (RGI emoji = 2 cells, grapheme-aware), so clamping with them
+// guarantees rendered lines never exceed the terminal width.
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 /**
  * Run a git command asynchronously and return lines of output, or null on failure.
  * Timed out: a hung git (e.g. stuck on a lock) must not leave a dangling promise —
@@ -41,6 +45,35 @@ function gitLines(
     });
     child.on("error", () => finish(null));
   });
+}
+
+/**
+ * Assemble the model line: model name + latency status on the left, budget bar
+ * on the right, padded so the bar sits at the right edge. All inputs are
+ * pre-styled ANSI strings. Returns the unclamped line (caller applies
+ * fitWidth). The latency status sits just right of the model name; visibleWidth
+ * keeps the bar aligned even when the latency icon contains emoji.
+ */
+export function composeModelLine(
+  modelPart: string,
+  latencyStatus: string,
+  budgetStr: string,
+  width: number,
+): string {
+  const latencyPart = latencyStatus
+    ? (modelPart ? " " : "") + latencyStatus
+    : "";
+  const leftPart = modelPart + latencyPart;
+  if (!leftPart && !budgetStr) return "";
+  if (budgetStr && leftPart) {
+    const padWidth = Math.max(
+      2,
+      width - visibleWidth(leftPart) - visibleWidth(budgetStr),
+    );
+    return leftPart + " ".repeat(padWidth) + budgetStr;
+  }
+  if (budgetStr) return budgetStr;
+  return leftPart;
 }
 
 /**
@@ -243,6 +276,22 @@ export default function (pi: ExtensionAPI) {
           }
         }
 
+        // Other extension statuses. The custom footer replaces the built-in
+        // footer, which would otherwise hide setStatus items — surface the rest
+        // on line 1. Voice is rendered above; response-latency is rendered on
+        // line 2 (right of the model name) so a long line 1 can't clip it off.
+        const extStatuses = footerData.getExtensionStatuses();
+        const latencyStatus = extStatuses.get("response-latency") || "";
+        const extraStatuses: string[] = [];
+        for (const [key, value] of extStatuses) {
+          if (key !== "voice" && key !== "response-latency" && value)
+            extraStatuses.push(value);
+        }
+        if (extraStatuses.length > 0) {
+          left +=
+            theme.fg("muted", " ") + extraStatuses.join(theme.fg("muted", " "));
+        }
+
         // Model name + token budget bar on same line
         const usage = ctx.getContextUsage();
         const modelName = ctx.model?.name || "";
@@ -266,7 +315,7 @@ export default function (pi: ExtensionAPI) {
 
         const total = filled + empty;
         const zoneSize = Math.ceil(total / 3);
-        let barParts: string[] = [];
+        const barParts: string[] = [];
         for (let i = 0; i < total; i++) {
           if (i < filled) {
             const colorCode =
@@ -290,26 +339,24 @@ export default function (pi: ExtensionAPI) {
           ? `${bar} ${pctColor}${Math.round(pct)}%${ansiReset} | ${theme.fg("dim", formatTokens(usage.tokens ?? 0) + "/" + formatTokens(usage.contextWindow))}`
           : "";
 
-        // Combine model name (left) and budget bar (right) with padding
-        let middleLine = "";
-        if (modelName || budgetStr) {
-          const modelPart = modelName ? theme.fg("dim", modelName) : "";
-          if (budgetStr && modelPart) {
-            // Estimate visible widths (strip ANSI codes for length calc)
-            const stripAnsi = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, "");
-            const modelVis = stripAnsi(modelPart).length;
-            const budgetVis = stripAnsi(budgetStr).length;
-            const padWidth = Math.max(2, width - modelVis - budgetVis);
-            middleLine = modelPart + " ".repeat(padWidth) + budgetStr;
-          } else if (budgetStr) {
-            middleLine = budgetStr;
-          } else {
-            middleLine = modelPart;
-          }
-        }
+        // Model name + latency icon (left), budget bar (right). The latency
+        // status sits just right of the model name.
+        const modelPart = modelName ? theme.fg("dim", modelName) : "";
+        const middleLine = composeModelLine(
+          modelPart,
+          latencyStatus,
+          budgetStr,
+          width,
+        );
 
-        // Two-line footer: project/branch, model + budget bar
-        return [left, middleLine];
+        // Two-line footer: project/branch, model + latency + budget bar.
+        // Clamp to terminal width (pi-tui's own width algorithm) — line 1
+        // accumulates git counts plus every other extension's status and can
+        // exceed the width; overlong lines crash the TUI.
+        return [
+          truncateToWidth(left, width),
+          truncateToWidth(middleLine, width),
+        ];
       };
 
       return {
