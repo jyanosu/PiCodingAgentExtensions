@@ -1,12 +1,32 @@
 // Behavior tests for obsidian-logger image embedding
 // (run: node tests/obsidian-logger.test.mjs)
 import assert from "node:assert";
-import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import {
+  access,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
+
+const exists = async (p) => {
+  try {
+    await access(p);
+    return true;
+  } catch {
+    return false;
+  }
+};
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   extractUserImages,
   appendToDailyFile,
+  slugifyTitle,
+  formatDateISO,
+  renameSessionFolder,
 } from "../extensions/obsidian-logger/index.ts";
 
 const ok = (name) => console.log(`  ok - ${name}`);
@@ -145,5 +165,108 @@ await withRoot(async (root) => {
   assert.ok(md.includes("response text"));
 });
 ok("appendToDailyFile assistant entry unchanged");
+
+// --- slugifyTitle: title → folder-name slug ---
+assert.strictEqual(
+  slugifyTitle("Fix file tree cursor"),
+  "fix-file-tree-cursor",
+);
+ok("slugifyTitle basic");
+assert.strictEqual(slugifyTitle("  Hello,  World! "), "hello-world");
+ok("slugifyTitle collapses punctuation/whitespace");
+assert.strictEqual(slugifyTitle("a--b__c 9"), "a-b-c-9");
+ok("slugifyTitle mixed separators");
+assert.strictEqual(slugifyTitle("!!!"), "");
+ok("slugifyTitle all-punctuation → empty");
+assert.strictEqual(slugifyTitle("").length, 0);
+ok("slugifyTitle empty → empty");
+const longSlug = slugifyTitle("word-".repeat(20)); // 100 chars
+assert.ok(longSlug.length <= 40 && !longSlug.endsWith("-"));
+ok("slugifyTitle capped at 40, no trailing dash");
+
+// --- formatDateISO: chronological shape ---
+assert.match(formatDateISO(), /^\d{4}-\d{2}-\d{2}$/);
+ok("formatDateISO is YYYY-MM-DD");
+
+// --- renameSessionFolder: real fs behavior in a temp root ---
+await withRoot(async (root) => {
+  // existing uuid folder gets renamed, old path gone, content preserved
+  const oldDir = sessionFolder(root);
+  await mkdir(oldDir, { recursive: true });
+  await writeFile(join(oldDir, "MM-DD.md"), "note");
+  const res = await renameSessionFolder(root, "proj", "sess1", "Fix the tree");
+  assert.strictEqual(res.renamed, true);
+  assert.match(res.folder, /^\d{4}-\d{2}-\d{2}-fix-the-tree$/);
+  assert.strictEqual(
+    await exists(join(root, "Projects", "proj", "sess1")),
+    false,
+  );
+  const md = await readFile(
+    join(root, "Projects", "proj", res.folder, "MM-DD.md"),
+    "utf8",
+  );
+  assert.strictEqual(md, "note");
+});
+ok("renameSessionFolder renames existing folder, keeps content");
+
+await withRoot(async (root) => {
+  // title set before first write: no rename, next write creates titled folder
+  const res = await renameSessionFolder(root, "proj", "sess1", "Early Title");
+  assert.strictEqual(res.renamed, false);
+  assert.ok(!res.error);
+  await appendToDailyFile(
+    makeCtx(root),
+    root,
+    "proj",
+    res.folder,
+    "user",
+    "hi",
+  );
+  const files = await readdir(join(root, "Projects", "proj", res.folder));
+  assert.ok(files.length === 1 && files[0].endsWith(".md"));
+});
+ok("renameSessionFolder pre-names folder before first write");
+
+await withRoot(async (root) => {
+  // collision: identical target name taken → -2 suffix
+  const taken = `${formatDateISO()}-demo`;
+  await mkdir(join(root, "Projects", "proj", taken), { recursive: true });
+  await mkdir(sessionFolder(root), { recursive: true });
+  const res = await renameSessionFolder(root, "proj", "sess1", "Demo");
+  assert.strictEqual(res.renamed, true);
+  assert.strictEqual(res.folder, `${taken}-2`);
+});
+ok("renameSessionFolder collision → -2 suffix");
+
+await withRoot(async (root) => {
+  const res = await renameSessionFolder(root, "proj", "sess1", "!!!");
+  assert.strictEqual(res.error, "empty slug");
+  assert.strictEqual(res.folder, "sess1");
+});
+ok("renameSessionFolder empty slug → error, folder unchanged");
+
+await withRoot(async (root) => {
+  // title flows into the note frontmatter
+  await appendToDailyFile(
+    makeCtx(root),
+    root,
+    "proj",
+    "sess1",
+    "user",
+    "hi",
+    [],
+    "vault",
+    "My Session Title",
+  );
+  const md = await readFile(
+    join(sessionFolder(root), (await readdir(sessionFolder(root)))[0]),
+    "utf8",
+  );
+  assert.ok(
+    md.includes("title: My Session Title"),
+    `frontmatter has title, got: ${md.split("\n").slice(0, 6).join(" | ")}`,
+  );
+});
+ok("appendToDailyFile writes title into frontmatter");
 
 console.log("\nAll obsidian-logger tests passed");

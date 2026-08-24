@@ -72,19 +72,43 @@ reasoning for the current session:
 - Reasoning appears inside a foldable `<details>🧠 Reasoning</details>` block
   within the response entry, so the visible answer stays uncluttered.
 
+### Name the Session (Title)
+
+Session folders are UUIDs by default — hard to find in the vault. Give a
+session a human-readable name:
+
+| Command | Action |
+| --- | --- |
+| `/obsidian-logger title <name>` | Rename the session folder to `YYYY-MM-DD-<slug>` and record the title |
+| `/obsidian-logger title` | Show the current title (if any) |
+
+- **Renames in place**: existing notes move with the folder. If Obsidian has a
+  note from the folder open, the rename can fail (Windows file lock) — the
+  title is still recorded for frontmatter; close the note and re-run.
+- **Works before the first write** too: the titled folder is simply created
+  on demand.
+- **Collisions**: if `YYYY-MM-DD-<slug>` already exists in the project, a
+  `-2`, `-3`, … suffix is appended.
+- **Frontmatter**: the title is written into each note's frontmatter as
+  `title: <name>` (notes created before titling are not backfilled).
+- **Survives restarts**: the mapping is persisted as a session entry, so a
+  resumed session keeps writing to the renamed folder.
+
 ## Folder Structure
 
 ```
-{root}/Projects/{projectName}/{sessionId}/MM-DD-YYYY.md   (rolls over to -2, -3, ... past ~50KB)
-{root}/Projects/{projectName}/{sessionId}/images/img-YYYYMMDD-HHMMSS-N.png
+{root}/Projects/{projectName}/{session folder}/MM-DD-YYYY.md   (rolls over to -2, -3, ... past ~50KB)
+{root}/Projects/{projectName}/{session folder}/images/img-YYYYMMDD-HHMMSS-N.png
 ```
 
 `{root}` is your vault by default, or `{tmpdir}/pi-obsidian-logger` in temp mode.
+The session folder is the Pi session UUID, or `YYYY-MM-DD-<slug>` after
+`/obsidian-logger title <name>`.
 
-Example: `C:/Vault/Projects/eVETAssist/abc123-def456/06-15-2025.md`
+Example: `C:/Vault/Projects/eVETAssist/2026-08-24-filetree-cursor-fix/08-24-2026.md`
 
 - **Project name**: Last directory component of your working directory
-- **Session ID**: Unique Pi session UUID
+- **Session folder**: Unique Pi session UUID, or a titled `YYYY-MM-DD-<slug>` name
 - **Date file**: MM-DD-YYYY format, appends if file exists; rolls over to
   `MM-DD-YYYY-2.md`, `-3.md`, ... once a note approaches 50KB (Obsidian's
   renderer drops `![[embeds]]` in very large notes, ~100KB+)
@@ -102,8 +126,6 @@ the screenshot lives right where you asked about it.
   (no vault to resolve wikilinks).
 - File name: `img-YYYYMMDD-HHMMSS-N.png` (N = position in the message).
 - Supported types: png, jpeg, gif, webp, bmp (anything else falls back to `.png`).
-
-## Markdown Format
 
 ## Markdown Format
 

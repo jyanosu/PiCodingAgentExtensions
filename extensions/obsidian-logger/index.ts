@@ -24,13 +24,17 @@
 import type {
   ExtensionAPI,
   ExtensionContext,
+  SessionEntry,
 } from "@earendil-works/pi-coding-agent";
+
+type CustomEntry = Extract<SessionEntry, { type: "custom" }>;
 import { parseSkillBlock } from "@earendil-works/pi-coding-agent";
 import {
   appendFile,
   mkdir,
   open,
   readFile,
+  rename,
   stat,
   writeFile,
 } from "node:fs/promises";
@@ -129,6 +133,86 @@ function formatDate(): string {
   const dd = String(now.getDate()).padStart(2, "0");
   const yyyy = now.getFullYear();
   return `${mm}-${dd}-${yyyy}`;
+}
+
+/** Format date as YYYY-MM-DD (sorts chronologically — used for titled folders) */
+export function formatDateISO(): string {
+  const now = new Date();
+  const mm = String(now.getMonth() + 1).padStart(2, "0");
+  const dd = String(now.getDate()).padStart(2, "0");
+  return `${now.getFullYear()}-${mm}-${dd}`;
+}
+
+/**
+ * Turn a session title into a folder-name slug: lowercase, runs of
+ * non-alphanumerics collapsed to single dashes, max 40 chars.
+ * Returns "" when nothing usable remains.
+ */
+export function slugifyTitle(title: string): string {
+  const slug = title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40)
+    .replace(/-+$/g, "");
+  return slug;
+}
+
+/**
+ * Rename (or pre-name) the session folder for a human-readable title.
+ *
+ * Target name: {YYYY-MM-DD}-{slug}, with -2/-3/... appended on collision
+ * with an existing sibling folder. When the current folder does not exist
+ * yet (title set before the first write), nothing is renamed — the next
+ * write simply creates the titled folder.
+ *
+ * Returns the effective folder name; `renamed` is true only when a real
+ * fs.rename happened. A rename failure (e.g. Obsidian holds a file open,
+ * EBUSY on Windows) keeps the old folder and reports the error — the title
+ * still applies to note frontmatter.
+ */
+export async function renameSessionFolder(
+  root: string,
+  projectName: string,
+  currentFolder: string,
+  title: string,
+): Promise<{ folder: string; renamed: boolean; error?: string }> {
+  const slug = slugifyTitle(title);
+  if (!slug)
+    return { folder: currentFolder, renamed: false, error: "empty slug" };
+
+  const projectDir = join(root, "Projects", projectName);
+  let name = `${formatDateISO()}-${slug}`;
+  let i = 2;
+  for (;;) {
+    try {
+      await stat(join(projectDir, name));
+      name = `${formatDateISO()}-${slug}-${i++}`;
+    } catch {
+      break; // free
+    }
+  }
+
+  const oldPath = join(projectDir, currentFolder);
+  let exists = true;
+  try {
+    await stat(oldPath);
+  } catch {
+    exists = false;
+  }
+  if (!exists) return { folder: name, renamed: false }; // first write creates it
+  if (name === currentFolder) return { folder: name, renamed: false };
+
+  try {
+    await rename(oldPath, join(projectDir, name));
+    return { folder: name, renamed: true };
+  } catch (err) {
+    const msg =
+      typeof err === "object" && err !== null && "message" in err
+        ? (err as { message: string }).message
+        : String(err);
+    return { folder: currentFolder, renamed: false, error: msg };
+  }
 }
 
 /** Extract text content from user message */
@@ -269,6 +353,7 @@ async function buildFrontmatter(
   ctx: ExtensionContext,
   projectName: string,
   sessionId: string,
+  title?: string,
 ): Promise<string> {
   const model = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "unknown";
   const branch = await getGitBranch(ctx.cwd);
@@ -276,9 +361,9 @@ async function buildFrontmatter(
     "---",
     `project: ${yq(projectName)}`,
     `session: ${yq(sessionId)}`,
-    `model: ${yq(model)}`,
-    `cwd: ${yq(ctx.cwd)}`,
   ];
+  if (title) lines.push(`title: ${yq(title)}`);
+  lines.push(`model: ${yq(model)}`, `cwd: ${yq(ctx.cwd)}`);
   if (branch) lines.push(`branch: ${yq(branch)}`);
   lines.push(`created: ${new Date().toISOString()}`);
   lines.push("---");
@@ -327,6 +412,7 @@ export async function appendToDailyFile(
   text: string,
   images: Array<{ data: string; mimeType: string }> = [],
   target: "vault" | "tmp" = "vault",
+  title?: string,
 ): Promise<void> {
   if (!text.trim()) return;
 
@@ -382,7 +468,7 @@ export async function appendToDailyFile(
           const fh = await open(filePath, "wx");
           try {
             await fh.writeFile(
-              await buildFrontmatter(ctx, projectName, sessionId),
+              await buildFrontmatter(ctx, projectName, sessionId, title),
               "utf-8",
             );
           } finally {
@@ -419,10 +505,16 @@ export default function (pi: ExtensionAPI) {
   let projectName: string = "";
   let sessionId: string = "";
   let readmeChecked = false;
+  /** Human-readable session title (set via /obsidian-logger title <name>) */
+  let sessionTitle: string | null = null;
+  /** Effective session folder name; null = use the raw sessionId */
+  let folderName: string | null = null;
+
+  const effectiveFolder = () => folderName ?? sessionId;
 
   /** Full state string for notifications */
   const state = () =>
-    `${enabled ? "ON" : "OFF"} (target: ${logTarget}, thinking: ${logThinking ? "on" : "off"})`;
+    `${enabled ? "ON" : "OFF"} (target: ${logTarget}, thinking: ${logThinking ? "on" : "off"}${sessionTitle ? `, title: ${sessionTitle}` : ""})`;
 
   pi.on("session_start", async (_event, ctx) => {
     enabled = readEnabledFromConfig();
@@ -455,7 +547,35 @@ export default function (pi: ExtensionAPI) {
       return;
     }
 
-    const folderPath = join(vaultPath, "Projects", projectName, sessionId);
+    // Restore the titled folder from the last persisted entry, so a resumed
+    // session keeps writing into the renamed folder instead of splitting
+    // notes between the uuid and the title. Only trusted when the folder
+    // still exists on disk.
+    const last = [...ctx.sessionManager.getEntries()]
+      .reverse()
+      .find(
+        (e): e is CustomEntry =>
+          e.type === "custom" && e.customType === "obsidianLoggerTitle",
+      );
+    if (last && typeof last.data === "string") {
+      try {
+        const saved = JSON.parse(last.data) as { t?: unknown; f?: unknown };
+        if (typeof saved.f === "string" && saved.f) {
+          await stat(join(vaultPath, "Projects", projectName, saved.f));
+          folderName = saved.f;
+          sessionTitle = typeof saved.t === "string" ? saved.t : null;
+        }
+      } catch {
+        // missing folder or corrupt entry — fall back to the uuid folder
+      }
+    }
+
+    const folderPath = join(
+      vaultPath,
+      "Projects",
+      projectName,
+      effectiveFolder(),
+    );
     console.log(`[obsidian-logger] Logging to: ${folderPath}`);
     if (ctx.hasUI) ctx.ui.notify(`Obsidian logger: ${state()}`, "info");
   });
@@ -488,20 +608,22 @@ export default function (pi: ExtensionAPI) {
       ctx,
       root,
       projectName,
-      sessionId,
+      effectiveFolder(),
       role,
       text,
       images,
       logTarget,
+      sessionTitle ?? undefined,
     );
   });
 
   // Command: /obsidian-logger [on|off|tmp|vault|thinking [on|off]] (no arg = toggle on/off)
   pi.registerCommand("obsidian-logger", {
     description:
-      "Toggle logging (on|off), switch target (tmp|vault), or log reasoning (thinking [on|off])",
+      "Toggle logging (on|off), switch target (tmp|vault), log reasoning (thinking [on|off]), or name the session (title <name>)",
     handler: async (args, ctx) => {
-      const arg = (args || "").trim().toLowerCase();
+      const rawArgs = args || "";
+      const arg = rawArgs.trim().toLowerCase();
 
       if (arg === "tmp") {
         logTarget = "tmp";
@@ -528,6 +650,76 @@ export default function (pi: ExtensionAPI) {
             `Obsidian logger: ${state()} — logging to ${join(vaultPath, "Projects", projectName)}`,
             "info",
           );
+        return;
+      }
+
+      if (arg === "title" || arg.startsWith("title ")) {
+        if (!enabled || !sessionId) {
+          if (ctx.hasUI)
+            ctx.ui.notify(
+              `Obsidian logger: ${state()} — title needs an enabled session`,
+              "warning",
+            );
+          return;
+        }
+        const root = logTarget === "tmp" ? TMP_ROOT : vaultPath;
+        if (!root) {
+          if (ctx.hasUI)
+            ctx.ui.notify(
+              `No target configured — use /obsidian-logger tmp or set OBSIDIAN_VAULT_PATH`,
+              "warning",
+            );
+          return;
+        }
+        const title = rawArgs.trim().slice("title".length).trim();
+        if (!title) {
+          if (ctx.hasUI)
+            ctx.ui.notify(
+              sessionTitle
+                ? `Session title: ${sessionTitle} (folder: ${effectiveFolder()})`
+                : `No title set — usage: /obsidian-logger title <name>`,
+              "info",
+            );
+          return;
+        }
+        const res = await renameSessionFolder(
+          root,
+          projectName,
+          effectiveFolder(),
+          title,
+        );
+        if (res.error === "empty slug") {
+          if (ctx.hasUI)
+            ctx.ui.notify(
+              `Title "${title}" has no usable characters — usage: /obsidian-logger title <name>`,
+              "warning",
+            );
+          return;
+        }
+        sessionTitle = title;
+        folderName = res.folder;
+        // Persist so a resumed session keeps the titled folder
+        pi.appendEntry(
+          "obsidianLoggerTitle",
+          JSON.stringify({ t: title, f: res.folder }),
+        );
+        if (ctx.hasUI) {
+          if (res.renamed)
+            ctx.ui.notify(
+              `Session renamed → ${join(root, "Projects", projectName, res.folder)}`,
+              "info",
+            );
+          else if (res.error)
+            ctx.ui.notify(
+              `Title set for notes only — folder rename failed: ${res.error} (close the note in Obsidian and retry)`,
+              "warning",
+            );
+          else
+            ctx.ui.notify(
+              `Session will be logged to folder: ${res.folder}`,
+              "info",
+            );
+        }
         return;
       }
 
