@@ -91,8 +91,10 @@ session a human-readable name:
   `-2`, `-3`, … suffix is appended.
 - **Frontmatter**: the title is written into each note's frontmatter as
   `title: <name>` (notes created before titling are not backfilled).
-- **Survives restarts**: the mapping is persisted as a session entry, so a
-  resumed session keeps writing to the renamed folder.
+- **Survives restarts** (vault mode): the mapping is persisted as a session
+  entry, so a resumed session keeps writing to the renamed folder. In tmp
+  mode the title is lost on restart — consistent with the target switch
+  itself not being persisted.
 
 ## Folder Structure
 

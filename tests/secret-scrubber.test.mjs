@@ -31,6 +31,17 @@ assert.strictEqual(
 );
 ok("catches Anthropic key (specific before generic)");
 
+// sk-proj- is the standard format for new OpenAI keys; the generic sk-
+// pattern cannot match it, so it needs its own dedicated pattern.
+assert.strictEqual(
+    matchSecret(
+        "OPENAI_API_KEY=sk-proj-abcdefghijklmnopqrstuv12",
+        DEFAULT_SECRET_PATTERNS,
+    ).name,
+    "OpenAI project key",
+);
+ok("catches OpenAI sk-proj- project key");
+
 const ghp = "ghp_" + "a".repeat(36);
 assert.strictEqual(
     matchSecret(

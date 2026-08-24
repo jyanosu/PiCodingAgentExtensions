@@ -41,6 +41,9 @@ export interface SecretPattern {
  */
 export const DEFAULT_SECRET_PATTERNS: SecretPattern[] = [
   { name: "Anthropic API key", re: /\bsk-ant-[A-Za-z0-9_-]{20,}/ },
+  // sk-proj- is the standard format for new OpenAI keys; the generic sk-
+  // pattern below cannot match it (the second dash breaks the char class)
+  { name: "OpenAI project key", re: /\bsk-proj-[A-Za-z0-9_-]{20,}/ },
   { name: "OpenAI API key", re: /\bsk-[A-Za-z0-9]{20,}\b/ },
   { name: "Stripe live key", re: /\b(?:sk|rk)_live_[A-Za-z0-9]{10,}/ },
   { name: "GitHub PAT (classic)", re: /\bghp_[A-Za-z0-9]{30,}\b/ },
