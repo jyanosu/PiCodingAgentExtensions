@@ -17,6 +17,7 @@ Custom extensions for [Pi Coding Agent](https://github.com/earendil-works/pi-cod
 | [search-browser](./extensions/search-browser.ts) | Toggle browser curator for `web_search` calls (`/search-browser on\|off`), persisted per session |
 | [obsidian-logger](./extensions/obsidian-logger/) | Logs prompts + responses to an Obsidian vault as Markdown (`/obsidian-logger`) |
 | [danger-guard](./extensions/danger-guard.ts) | Confirms before destructive bash commands (`rm -rf`, `git push --force`, `DROP TABLE`, …); blocks without UI (`/danger-guard`) |
+| [file-tree](./extensions/file-tree.ts) | Live file tree panel on the right side (toggle: `/tree` or `Ctrl+Alt+T`) with git status colors/markers + branch header, name filter (`/tree <pattern>`), scroll (`Ctrl+Alt+↑/↓`), optional key-focus mode (`/tree focus on` → `Ctrl+Alt+L` panel keys, type to filter, `Esc` back) |
 
 ## Installation
 
