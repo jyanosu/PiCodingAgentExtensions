@@ -16,6 +16,7 @@ Custom extensions for [Pi Coding Agent](https://github.com/earendil-works/pi-cod
 | [auto-continue](./extensions/auto-continue.ts) | Auto-sends "continue" when the model leaks unexecuted tool-call XML as text (toggle: `/autocontinue`) |
 | [search-browser](./extensions/search-browser.ts) | Toggle browser curator for `web_search` calls (`/search-browser on\|off`), persisted per session |
 | [obsidian-logger](./extensions/obsidian-logger/) | Logs prompts + responses to an Obsidian vault as Markdown (`/obsidian-logger`) |
+| [secret-scrubber](./extensions/secret-scrubber.ts) | Scans `bash`/`write`/`edit` calls for well-known secret shapes (OpenAI/Anthropic/Stripe/GitHub/AWS/Google/Slack/HF keys, private key blocks); confirms before proceeding, blocks without UI (`/secret-scrubber`) |
 | [danger-guard](./extensions/danger-guard.ts) | Confirms before destructive bash commands (`rm -rf`, `git push --force`, `DROP TABLE`, …); blocks without UI (`/danger-guard`) |
 | [file-tree](./extensions/file-tree.ts) | Live file tree panel on the right side (toggle: `/filetree` or `Ctrl+Alt+T`) with git status colors/markers + branch header, name filter (`/filetree <pattern>`), scroll (`Ctrl+Alt+↑/↓`), optional key-focus mode (`/filetree focus on` → `Ctrl+Alt+L` panel keys, type to filter, `Esc` back) |
 
@@ -119,13 +120,31 @@ Controls whether `web_search` opens the interactive browser curator. `/search-br
 
 ### obsidian-logger
 
-Appends user prompts and assistant responses (no thinking blocks, no tool output) to `{vault}/Projects/{project}/{sessionId}/MM-DD-YYYY.md`. Images attached to a prompt (e.g. `/look` screenshots) are saved to `{session}/images/` and embedded under the prompt entry. Toggle with `/obsidian-logger on|off`.
+Appends user prompts and assistant responses (no thinking blocks, no tool output) to `{vault}/Projects/{project}/{session folder}/MM-DD-YYYY.md`. Name a session with `/obsidian-logger title <name>` — the UUID folder is renamed to `YYYY-MM-DD-<slug>` (existing notes move with it; the title also lands in note frontmatter). Images attached to a prompt (e.g. `/look` screenshots) are saved to `{session}/images/` and embedded under the prompt entry. Toggle with `/obsidian-logger on|off`.
 
 Config via `.env` next to the extension or environment variables:
 
 ```bash
 OBSIDIAN_VAULT_PATH=/path/to/vault
 OBSIDIAN_LOGGER_ENABLED=true   # optional, default true
+```
+
+### secret-scrubber
+
+Complements danger-guard: blocks *leaks*, not just destructive commands. Scans the `command` of `bash` calls and the content of `write`/`edit` calls before they execute. Matches ask for confirmation showing only the pattern name + a masked value (`sk-a…j123`) — the secret itself is never echoed. On by default every session — state is in-memory, never persisted.
+
+Commands:
+
+- `/secret-scrubber` — show state + active patterns
+- `/secret-scrubber on|off|toggle`
+
+Default patterns: OpenAI `sk-…`, Anthropic `sk-ant-…`, Stripe live keys, GitHub PATs (classic + fine-grained), AWS access key ids, Google API keys, Slack tokens, HuggingFace tokens, Telegram bot tokens, `-----BEGIN … PRIVATE KEY-----` blocks.
+
+Environment variables:
+
+```bash
+SECRET_SCRUBBER_PATTERNS='["\\bMYKEY_[A-Za-z0-9]{16}"]'  # JSON array of regex strings, replaces defaults
+SECRET_SCRUBBER_TIMEOUT_MS=120000                        # confirm timeout (default 120s; timeout = block)
 ```
 
 ### danger-guard
