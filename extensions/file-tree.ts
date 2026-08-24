@@ -262,6 +262,83 @@ interface TreeEntry {
 	rel: string;
 }
 
+const FILE_ICONS: Record<string, string> = {
+	ts: "🔷",
+	mts: "🔷",
+	cts: "🔷",
+	js: "🟨",
+	mjs: "🟨",
+	cjs: "🟨",
+	jsx: "🟨",
+	json: "🧾",
+	md: "📝",
+	mdx: "📝",
+	rst: "📝",
+	txt: "📄",
+	log: "📄",
+	css: "🎨",
+	scss: "🎨",
+	less: "🎨",
+	html: "🌐",
+	htm: "🌐",
+	xml: "🌐",
+	py: "🐍",
+	rs: "🦀",
+	go: "🐹",
+	java: "☕",
+	c: "🛠",
+	h: "🛠",
+	cpp: "🛠",
+	hpp: "🛠",
+	cc: "🛠",
+	sh: "💻",
+	bash: "💻",
+	zsh: "💻",
+	ps1: "💻",
+	bat: "💻",
+	yaml: "⚙",
+	yml: "⚙",
+	toml: "⚙",
+	ini: "⚙",
+	conf: "⚙",
+	env: "⚙",
+	png: "🖼",
+	jpg: "🖼",
+	jpeg: "🖼",
+	gif: "🖼",
+	webp: "🖼",
+	svg: "🖼",
+	bmp: "🖼",
+	ico: "🖼",
+	mp4: "🎬",
+	mov: "🎬",
+	mkv: "🎬",
+	webm: "🎬",
+	mp3: "🎵",
+	wav: "🎵",
+	ogg: "🎵",
+	flac: "🎵",
+	zip: "📦",
+	tar: "📦",
+	gz: "📦",
+	rar: "📦",
+	"7z": "📦",
+	pdf: "📕",
+	sql: "🗃",
+	db: "🗃",
+};
+
+function fileIcon(name: string): string {
+	const lower = name.toLowerCase();
+	if (lower === "dockerfile") return "🐳";
+	if (lower === "makefile") return "🔨";
+	if (lower === ".gitignore" || lower === ".dockerignore") return "🛡";
+	if (lower.endsWith(".lock") || lower === "package-lock.json") return "🔒";
+	const dot = lower.lastIndexOf(".");
+	const ext = dot > 0 ? lower.slice(dot + 1) : "";
+	return FILE_ICONS[ext] ?? "📄";
+}
+
 function relPath(root: string, abs: string): string {
 	return path.relative(root, abs).split(path.sep).join("/");
 }
@@ -343,15 +420,16 @@ function renderEntries(entries: TreeEntry[], git: GitState | null): string[] {
 					if (n > 0) marker = ` ${DIM}(${n})${RESET}`;
 				}
 			}
-			out.push(`${prefix}${BOLD_CYAN}▸ ${e.name}/${RESET}${marker}`);
+			out.push(`${prefix}📁 ${BOLD_CYAN}${e.name}/${RESET}${marker}`);
 			continue;
 		}
 		const code = git?.status.get(e.rel);
+		const icon = fileIcon(e.name);
 		// Color the file name by git status; clean files stay dim.
 		out.push(
 			code
-				? `${prefix}${gitColor(code)}${e.name}${RESET} ${gitMarker(code)}`
-				: `${DIM}${prefix}${e.name}${RESET}`,
+				? `${prefix}${icon} ${gitColor(code)}${e.name}${RESET} ${gitMarker(code)}`
+				: `${DIM}${prefix}${icon} ${e.name}${RESET}`,
 		);
 	}
 	return out;
