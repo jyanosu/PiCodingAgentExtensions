@@ -1,5 +1,76 @@
 # Startup Issues — PiCodingAgentExtensions
 
+## Startup pass 2026-08-24 (read-only, 4th — `main` @ f3f9a9b + uncommitted file-tree work, **Windows machine**)
+
+Typecheck passes (`npm run typecheck`, strict, exit 0). Since the 2026-08-21
+pass: obsidian-logger gained image embedding (`dbfdc88`) + 50KB daily-note
+rollover (`e2f4600`); response-latency gained the whole-turn ◷ stopwatch
+(`61598db`, `95f7827`, `7589d78`) and now renders in the footer (`a7b3be0`);
+highlight-footer now composes model+latency line via pi-tui's own
+`visibleWidth`/`truncateToWidth` (no more strip-ANSI estimate) and clamps both
+lines to terminal width; file-tree extension landed in 3 commits (`45cf3c4`,
+`79d39aa`, `f3f9a9b`) plus uncommitted WIP (+170/-19): focus-mode cursor,
+Enter = copy path, `o` = paste path into editor, ◉/✎ badges for files the agent
+read/edited (via `tool_call` hook).
+
+### New finding: file-tree.ts (uncommitted) — cursor-preservation bug in `setLines`
+
+```ts
+this.entries = entries;                      // reassigned first
+const prev = keepSelectedRel ??
+  (this.selected >= 0 ? this.entries[this.selected].rel : undefined);
+```
+
+`prev` reads the **new** list at the old index, so "keep cursor on the same
+file across refreshes" actually keeps the same **index** — after any insert
+above the cursor the highlight jumps to a different file. Harmless when
+called from `refreshTree` (it passes an explicit `keepSelectedRel`), but the
+filter-refresh path (`onFilterKey` debounce) and initial panel creation rely on
+the broken fallback. Fix: capture `this.entries[this.selected]?.rel` **before**
+reassigning `this.entries`.
+
+### Minor / smells (new code)
+
+1. **file-tree.ts** — `moveSelected` computes the cursor row as `next + 1`
+   (header = line 0) but ignores that an active filter line is unshifted into
+   the viewport, so with a filter active the visible window holds one fewer
+tree row; cursor-visibility scroll math is off by one. Cosmetic.
+2. **file-tree.ts** — `touched` map is never pruned (fine per-session; it is
+   cleared on `session_start`). The `tool_call` hook badges any tool whose
+   input has a string `path` — includes third-party tools, not just
+   read/edit/write. Acceptable.
+3. **file-tree.ts** — README table row documents focus mode keys but not the
+   uncommitted Enter=copy / `o`=paste / ◉✎ badges (docs will need updating when
+   this is committed).
+4. **obsidian-logger** — image file names use second-resolution timestamps;
+two prompts within the same second overwrite each other's `img-*.ext` in
+`images/` (both embeds then point at one file). Edge case.
+5. **obsidian-logger** — `resolveDailyFilePath` size check counts only the text
+   bytes, not the added image-embed lines (~30 B each). Negligible given the
+   50KB cap vs ~100KB Obsidian breakage.
+
+### What looks good (new code)
+
+- obsidian-logger rollover: frontmatter creation is keyed per resolved file
+  path, so `-2.md` etc. get their own frontmatter; `wx` + `fileCreations`
+  serialization still race-safe.
+- response-latency: stale-ctx handling consistent (tick self-stops; all event
+  handlers try/catch render); frozen values cleared on `session_shutdown`.
+- highlight-footer: using pi-tui's own width functions means the clamp matches
+  the TUI's width checker exactly — the overlong-line-crash class is closed for
+  both footer lines.
+- file-tree WIP: clipboard via stdin-based spawn (no arg injection),
+  `session_shutdown` cleanup present, touched-map normalization correct for
+  win32 case-insensitivity.
+
+### Carried over (unchanged since 2026-08-21)
+
+- Test suites are POSIX-only; `tests/danger-guard.test.mjs` (4 absolute-`/`
+  expectations) and `tests/voice-input.test.mjs` (bash-script fake ffmpeg)
+  fail on this Windows machine. Runtime code is platform-correct.
+- README install command still doesn't copy `voice-input/` +
+  `obsidian-logger/` dirs.
+
 ## Startup pass 2026-08-21 (read-only, 3rd — `main` @ f5b847b, **Windows machine**)
 
 Typecheck passes (`npm run typecheck`, strict, exit 0). Working tree clean on
