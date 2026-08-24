@@ -4,20 +4,22 @@
  * Usage: pi --extension ./extensions/file-tree.ts
  * (or copy to ~/.pi/agent/extensions/)
  *
- * Toggle: /tree or Ctrl+Alt+T
- * Filter: /tree <pattern> — show only entries whose name matches (plus ancestor dirs)
- * Clear filter: /tree clear
- * Focus mode (feature flag, off by default): /tree focus on|off
+ * Toggle: /filetree or Ctrl+Alt+T
+ * Filter: /filetree <pattern> — show only entries whose name matches (plus ancestor dirs)
+ * Clear filter: /filetree clear
+ * Focus mode (feature flag, off by default): /filetree focus on|off
  *   When on, the panel can take keyboard focus:
- *     Ctrl+Alt+L — focus panel (arrows/j/k scroll, type to filter, Esc back)
- *     Ctrl+Alt+H or Esc — return keys to the editor
+ *     Ctrl+Alt+L — focus/unfocus panel (toggle)
+ *     Arrows/j/k — move cursor · Enter — copy path to clipboard
+ *     o — paste selected path into editor · type — filter · Esc — back to editor
+ *   Files the agent read/edited this session get a ◉/✎ badge.
  *
  * Shows a live file tree of the current working directory in a panel on the
  * right edge. The panel is non-capturing (typing still goes to the editor)
  * and refreshes automatically when files change on disk.
  */
 
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { watch, type FSWatcher } from "node:fs";
 import { readdir } from "node:fs/promises";
 import path from "node:path";
@@ -156,12 +158,18 @@ interface FileTreePanelOptions {
 	onEscape?: () => void;
 	/** Printable char or "backspace" — filter editing while focused. */
 	onFilterKey?: (key: string) => void;
+	/** Enter on the selected entry. */
+	onEnter?: (abs: string) => void;
+	/** `o` on the selected entry — paste path into editor. */
+	onOpen?: (abs: string) => void;
 }
 
 /** Optional line shown above the tree (e.g. active filter). */
 class FileTreePanel implements Component {
 	private lines: string[] = [];
+	private entries: TreeEntry[] = [];
 	private scrollTop = 0;
+	private selected = -1; // index into entries; -1 = no cursor
 	private tui: TUI;
 	private opts: FileTreePanelOptions;
 	filterLine: string | null = null;
@@ -182,11 +190,11 @@ class FileTreePanel implements Component {
 			return;
 		}
 		if (matchesKey(data, "up") || data === "k") {
-			this.scroll(-1);
+			this.moveSelected(-1);
 			return;
 		}
 		if (matchesKey(data, "down") || data === "j") {
-			this.scroll(1);
+			this.moveSelected(1);
 			return;
 		}
 		const maxRows = Math.max(1, this.tui.terminal.rows - 6);
@@ -198,6 +206,14 @@ class FileTreePanel implements Component {
 			this.scroll(maxRows - 1);
 			return;
 		}
+		if (matchesKey(data, "enter") && this.selected >= 0) {
+			this.opts.onEnter?.(this.entries[this.selected].abs);
+			return;
+		}
+		if (data === "o" && this.selected >= 0) {
+			this.opts.onOpen?.(this.entries[this.selected].abs);
+			return;
+		}
 		if (matchesKey(data, "backspace")) {
 			this.opts.onFilterKey?.("backspace");
 			return;
@@ -207,8 +223,43 @@ class FileTreePanel implements Component {
 			this.opts.onFilterKey?.(data);
 	}
 
-	setLines(lines: string[]): void {
+	/** Move the cursor by delta, keeping it visible. -1 until first press. */
+	moveSelected(delta: number): void {
+		if (this.entries.length === 0) return;
+		const next = Math.min(
+			this.entries.length - 1,
+			Math.max(0, this.selected + delta),
+		);
+		this.selected = next;
+		const row = next + 1; // line 0 is the header
+		const maxRows = Math.max(1, this.tui.terminal.rows - 6);
+		if (row < this.scrollTop) this.scrollTop = row;
+		else if (row >= this.scrollTop + maxRows) this.scrollTop = row - maxRows + 1;
+		this.clampScroll();
+		this.tui.requestRender();
+	}
+
+	/** Absolute path of the cursor entry, or null. */
+	selectedAbs(): string | null {
+		return this.selected >= 0 ? this.entries[this.selected].abs : null;
+	}
+
+	setLines(
+		lines: string[],
+		entries?: TreeEntry[],
+		keepSelectedRel?: string,
+	): void {
 		this.lines = lines;
+		if (entries) {
+			// Keep the cursor on the same file across refreshes when possible.
+			// Capture the old rel BEFORE reassigning this.entries — the new
+			// list may be shorter/different, so the old index can be out of range.
+			const prev =
+				keepSelectedRel ??
+				(this.selected >= 0 ? this.entries[this.selected]?.rel : undefined);
+			this.entries = entries;
+			this.selected = prev ? entries.findIndex((e) => e.rel === prev) : -1;
+		}
 		this.clampScroll();
 		this.tui.requestRender();
 	}
@@ -243,7 +294,14 @@ class FileTreePanel implements Component {
 			this.scrollTop,
 			Math.max(0, this.lines.length - maxRows),
 		);
-		const visible = this.lines
+		// Highlight the cursor line (entry i renders at line i+1).
+		const display =
+			this.selected >= 0 && this.selected + 1 < this.lines.length
+				? this.lines.map((line, i) =>
+						i === this.selected + 1 ? `\x1b[1;33m❯${RESET} ${line}` : line,
+					)
+				: this.lines;
+		const visible = display
 			.slice(this.scrollTop, this.scrollTop + maxRows)
 			.map((line) => truncateToWidth(line, width));
 		if (this.filterLine) visible.unshift(truncateToWidth(this.filterLine, width));
@@ -251,6 +309,8 @@ class FileTreePanel implements Component {
 			visible.unshift(`${DIM}↑ ${this.scrollTop} more${RESET}`);
 		const hidden = this.lines.length - (this.scrollTop + visible.length);
 		if (hidden > 0) visible.push(`${DIM}↓ ${hidden} more${RESET}`);
+		if (this.selected >= 0)
+			visible.push(`${DIM}⏎ copy · o paste · esc exit${RESET}`);
 		return visible;
 	}
 }
@@ -259,7 +319,33 @@ interface TreeEntry {
 	name: string;
 	dir: boolean;
 	depth: number;
+	/** Relative path (slash-separated). */
 	rel: string;
+	/** Absolute path. */
+	abs: string;
+}
+
+/** Marker for files the agent touched this session. */
+function touchedMarker(kind: "read" | "edited"): string {
+	return kind === "edited" ? `\x1b[1;35m✎${RESET}` : `\x1b[1;36m◉${RESET}`;
+}
+
+/** Copy text to the system clipboard (stdin-based, cross-platform). */
+function copyToClipboard(text: string): Promise<void> {
+	return new Promise((resolve, reject) => {
+		const child =
+			process.platform === "win32"
+				? spawn("powershell", ["-NoProfile", "-Command", "Set-Clipboard"])
+				: process.platform === "darwin"
+					? spawn("pbcopy")
+					: spawn("xclip", ["-selection", "clipboard"]);
+		child.on("error", reject);
+		child.on("close", (code) =>
+			code === 0 ? resolve() : reject(new Error(`exit code ${code}`)),
+		);
+		child.stdin.write(text);
+		child.stdin.end();
+	});
 }
 
 const FILE_ICONS: Record<string, string> = {
@@ -369,16 +455,24 @@ async function walk(
 
 	for (const d of dirs) {
 		const abs = path.join(dir, d.name);
-		out.push({ name: d.name, dir: true, depth, rel: relPath(root, abs) });
+		out.push({
+			name: d.name,
+			dir: true,
+			depth,
+			rel: relPath(root, abs),
+			abs,
+		});
 		if (out.length >= MAX_ENTRIES) return;
 		await walk(root, abs, prefix + "  ", depth + 1, out, git);
 	}
 	for (const f of files) {
+		const abs = path.join(dir, f.name);
 		out.push({
 			name: f.name,
 			dir: false,
 			depth,
-			rel: relPath(root, path.join(dir, f.name)),
+			rel: relPath(root, abs),
+			abs,
 		});
 		if (out.length >= MAX_ENTRIES) return;
 	}
@@ -404,10 +498,18 @@ function filterEntries(entries: TreeEntry[], pattern: string): TreeEntry[] {
 	return entries.filter((_, i) => keep[i]);
 }
 
-function renderEntries(entries: TreeEntry[], git: GitState | null): string[] {
+function renderEntries(
+	entries: TreeEntry[],
+	git: GitState | null,
+	touched?: Map<string, "read" | "edited">,
+): string[] {
+	const normKey = (p: string) =>
+		process.platform === "win32" ? p.toLowerCase() : p;
 	const out: string[] = [];
 	for (const e of entries) {
 		const prefix = "  ".repeat(e.depth);
+		const tkind = touched?.get(normKey(e.abs));
+		const tmark = tkind ? ` ${touchedMarker(tkind)}` : "";
 		if (e.dir) {
 			let marker = "";
 			if (git) {
@@ -420,7 +522,7 @@ function renderEntries(entries: TreeEntry[], git: GitState | null): string[] {
 					if (n > 0) marker = ` ${DIM}(${n})${RESET}`;
 				}
 			}
-			out.push(`${prefix}📁 ${BOLD_CYAN}${e.name}/${RESET}${marker}`);
+			out.push(`${prefix}📁 ${BOLD_CYAN}${e.name}/${RESET}${marker}${tmark}`);
 			continue;
 		}
 		const code = git?.status.get(e.rel);
@@ -428,14 +530,23 @@ function renderEntries(entries: TreeEntry[], git: GitState | null): string[] {
 		// Color the file name by git status; clean files stay dim.
 		out.push(
 			code
-				? `${prefix}${icon} ${gitColor(code)}${e.name}${RESET} ${gitMarker(code)}`
-				: `${DIM}${prefix}${icon} ${e.name}${RESET}`,
+				? `${prefix}${icon} ${gitColor(code)}${e.name}${RESET} ${gitMarker(code)}${tmark}`
+				: `${DIM}${prefix}${icon} ${e.name}${RESET}${tmark}`,
 		);
 	}
 	return out;
 }
 
-async function buildTree(root: string, filter: string): Promise<string[]> {
+interface TreeResult {
+	lines: string[];
+	entries: TreeEntry[];
+}
+
+async function buildTree(
+	root: string,
+	filter: string,
+	touched?: Map<string, "read" | "edited">,
+): Promise<TreeResult> {
 	const git = await getGitState(root);
 	let header = git
 		? `${BOLD}${git.branch}${RESET} ${DIM}${git.status.size > 0 ? `● ${git.status.size} changed` : "clean"}${RESET}`
@@ -445,7 +556,10 @@ async function buildTree(root: string, filter: string): Promise<string[]> {
 	const shown = filter ? filterEntries(entries, filter) : entries;
 	if (filter)
 		header += ` ${DIM}[${shown.length} match${shown.length === 1 ? "" : "es"}]${RESET}`;
-	return [header, ...renderEntries(shown, git)];
+	return {
+		lines: [header, ...renderEntries(shown, git, touched)],
+		entries: shown,
+	};
 }
 
 export default function (pi: ExtensionAPI) {
@@ -460,6 +574,8 @@ export default function (pi: ExtensionAPI) {
 	let focusMode = false;
 	let panelHandle: OverlayHandle | null = null;
 	let filterDebounce: NodeJS.Timeout | null = null;
+	/** Absolute path (normalized) → how the agent touched it this session. */
+	const touched = new Map<string, "read" | "edited">();
 
 	function detachInput(): void {
 		removeInputListener?.();
@@ -499,7 +615,18 @@ export default function (pi: ExtensionAPI) {
 		if (refreshTimer) clearTimeout(refreshTimer);
 		refreshTimer = setTimeout(() => {
 			refreshTimer = null;
-			void buildTree(root, filter).then((lines) => activePanel?.setLines(lines));
+			void buildTree(root, filter, touched).then((res) =>
+				activePanel?.setLines(
+					res.lines,
+					res.entries,
+					activePanel?.selectedAbs()
+						? path
+								.relative(root, activePanel.selectedAbs()!)
+								.split(path.sep)
+								.join("/")
+						: undefined,
+				),
+			);
 		}, REFRESH_DEBOUNCE_MS);
 	}
 
@@ -572,14 +699,28 @@ export default function (pi: ExtensionAPI) {
 						};
 						const panel = new FileTreePanel(tui, {
 							onEscape: backToEditor,
+							onEnter: (abs) => {
+								void copyToClipboard(abs)
+									.then(() => ctx.ui.notify(`Copied: ${abs}`, "info"))
+									.catch((err) =>
+										ctx.ui.notify(
+											`Clipboard failed: ${err instanceof Error ? err.message : String(err)}`,
+											"error",
+										),
+									);
+							},
+							onOpen: (abs) => {
+								ctx.ui.pasteToEditor(abs);
+								ctx.ui.notify("Path pasted into editor", "info");
+							},
 							onFilterKey: (key) => {
 								filter = key === "backspace" ? filter.slice(0, -1) : filter + key;
 								panel.setFilterLine(filter ? `\x1b[1;36m✎ ${filter}${RESET}` : null);
 								if (filterDebounce) clearTimeout(filterDebounce);
 								filterDebounce = setTimeout(() => {
 									filterDebounce = null;
-									void buildTree(root, filter).then((lines) =>
-										activePanel?.setLines(lines),
+									void buildTree(root, filter, touched).then((res) =>
+										activePanel?.setLines(res.lines, res.entries),
 									);
 								}, 120);
 							},
@@ -589,7 +730,7 @@ export default function (pi: ExtensionAPI) {
 						// global input listener that runs before the editor sees them.
 						removeInputListener = tui.addInputListener((data) => {
 							if (matchesKey(data, "ctrl+alt+l") && !focusMode) {
-								ctx.ui.notify("Focus mode off — /tree focus on", "info");
+								ctx.ui.notify("Focus mode off — /filetree focus on", "info");
 								return { consume: true };
 							}
 							if (focusMode && panelHandle) {
@@ -616,7 +757,9 @@ export default function (pi: ExtensionAPI) {
 								return panel.scroll(-5) ? { consume: true } : undefined;
 							return undefined;
 						});
-						void buildTree(root, filter).then((lines) => panel.setLines(lines));
+						void buildTree(root, filter, touched).then((res) =>
+							panel.setLines(res.lines, res.entries),
+						);
 						return panel;
 					},
 					{
@@ -652,9 +795,9 @@ export default function (pi: ExtensionAPI) {
 		}
 	}
 
-	pi.registerCommand("tree", {
+	pi.registerCommand("filetree", {
 		description:
-			"Toggle file tree panel; /tree <pattern> filter; /tree clear; /tree focus on|off (panel key focus mode)",
+			"Toggle file tree panel; /filetree <pattern> filter; /filetree clear; /filetree focus on|off (panel key focus mode)",
 		handler: async (args, ctx) => {
 			await toggle(ctx, args);
 		},
@@ -674,6 +817,16 @@ export default function (pi: ExtensionAPI) {
 					e.type === "custom" && e.customType === "fileTreeFocusMode",
 			);
 		if (last && typeof last.data === "string") focusMode = last.data === "on";
+		touched.clear(); // fresh session → no agent-touched marks
+	});
+
+	pi.on("tool_call", (event, ctx) => {
+		// Track files the agent reads/edits so the tree can badge them.
+		const input = event.input as { path?: unknown } | undefined;
+		if (typeof input?.path !== "string" || !input.path) return;
+		const abs = path.resolve(ctx.cwd, input.path);
+		const key = process.platform === "win32" ? abs.toLowerCase() : abs;
+		touched.set(key, /(write|edit)/i.test(event.toolName) ? "edited" : "read");
 	});
 
 	pi.on("session_shutdown", () => {
