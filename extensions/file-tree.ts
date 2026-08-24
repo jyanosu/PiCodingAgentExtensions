@@ -516,11 +516,15 @@ export default function (pi: ExtensionAPI) {
 							}
 							if (focusMode && panelHandle) {
 								if (matchesKey(data, "ctrl+alt+l")) {
-									panelHandle.focus();
-									ctx.ui.notify(
-										"File tree focused — type to filter, Esc for editor",
-										"info",
-									);
+									// Toggle: focused → back to editor, else focus panel.
+									if (panelHandle.isFocused()) backToEditor();
+									else {
+										panelHandle.focus();
+										ctx.ui.notify(
+											"File tree focused — type to filter, Esc for editor",
+											"info",
+										);
+									}
 									return { consume: true };
 								}
 								if (matchesKey(data, "ctrl+alt+h")) {
