@@ -553,11 +553,16 @@ async function buildTree(
 		: `${DIM}${path.basename(root)}/${RESET}`;
 	const entries: TreeEntry[] = [];
 	await walk(root, root, "", 0, entries, git);
-	const shown = filter ? filterEntries(entries, filter) : entries;
-	if (filter)
+	// Trim: an accidental space (e.g. pressed while the panel has focus)
+	// must not collapse the tree to zero matches.
+	const f = filter.trim();
+	const shown = f ? filterEntries(entries, f) : entries;
+	if (f)
 		header += ` ${DIM}[${shown.length} match${shown.length === 1 ? "" : "es"}]${RESET}`;
+	let body = renderEntries(shown, git, touched);
+	if (f && shown.length === 0) body = [`${DIM}no matches for “${f}”${RESET}`];
 	return {
-		lines: [header, ...renderEntries(shown, git, touched)],
+		lines: [header, ...body],
 		entries: shown,
 	};
 }
